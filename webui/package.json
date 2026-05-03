@@ -1,0 +1,17 @@
+{
+  "name": "esp32-gameboy-webui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "build:fs": "npm run build && cd .. && ~/.platformio/penv/bin/pio run --target buildfs",
+    "upload:fs": "npm run build && cd .. && ~/.platformio/penv/bin/pio run --target uploadfs",
+    "upload:all": "npm run build && cd .. && ~/.platformio/penv/bin/pio run --target upload && ~/.platformio/penv/bin/pio run --target uploadfs"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

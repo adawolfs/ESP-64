@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <meta name="theme-color" content="#d7d5c7" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="ESP32 Boy" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>ESP32 Game Boy</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main class="stage" aria-label="ESP32 Game Boy web portal">
+      <section class="dmg" aria-label="Game Boy controller">
+        <header class="top-rail" aria-hidden="true">
+          <span class="power-pill">
+            <span class="power-arrow"></span>
+            <span>OFF</span>
+            <span class="power-dot"></span>
+            <span>ON</span>
+            <span class="power-arrow is-right"></span>
+          </span>
+          <span class="battery-light"></span>
+        </header>
+
+        <section class="screen-bezel" aria-label="Game screen">
+          <div class="bezel-top">
+            <span class="stripe stripe-left" aria-hidden="true"></span>
+            <span class="bezel-title">Dot Matrix With Stereo Sound</span>
+            <span class="stripe stripe-right" aria-hidden="true"></span>
+          </div>
+          <div class="screen-grid">
+            <div class="screen-window">
+              <canvas id="screen" width="160" height="144"></canvas>
+            </div>
+          </div>
+          <div id="status" class="status-line">connecting</div>
+        </section>
+
+        <div class="brandline" aria-hidden="true">
+          <span>Nintendo</span>
+          <strong>GAME BOY</strong>
+          <small>TM</small>
+        </div>
+
+        <section class="controls" aria-label="Controls">
+          <div class="dpad-shell">
+            <div class="dpad" aria-label="Directional pad">
+              <button class="hit-button dpad-button dpad-up" data-control="up" aria-label="Up"></button>
+              <button class="hit-button dpad-button dpad-left" data-control="left" aria-label="Left"></button>
+              <span class="dpad-center" aria-hidden="true"></span>
+              <button class="hit-button dpad-button dpad-right" data-control="right" aria-label="Right"></button>
+              <button class="hit-button dpad-button dpad-down" data-control="down" aria-label="Down"></button>
+            </div>
+          </div>
+
+          <div class="actions">
+            <div class="action-control action-control-b">
+              <button class="hit-button action-button" data-control="b" aria-label="B">
+                <span>B</span>
+              </button>
+              <span class="action-label" aria-hidden="true">B</span>
+            </div>
+            <div class="action-control action-control-a">
+              <button class="hit-button action-button" data-control="a" aria-label="A">
+                <span>A</span>
+              </button>
+              <span class="action-label" aria-hidden="true">A</span>
+            </div>
+          </div>
+
+          <div class="menu">
+            <div class="menu-control">
+              <button class="hit-button menu-hit" data-control="select" aria-label="Select">
+                <span></span>
+              </button>
+              <span class="menu-label" aria-hidden="true">SELECT</span>
+            </div>
+            <div class="menu-control">
+              <button class="hit-button menu-hit" data-control="start" aria-label="Start">
+                <span></span>
+              </button>
+              <span class="menu-label" aria-hidden="true">START</span>
+            </div>
+          </div>
+        </section>
+
+        <div class="speaker" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+
+
+        <section class="meta-panel" aria-label="Link status">
+          <div class="meta-head">
+            <span>Link Status</span>
+            <span>DMG-01</span>
+          </div>
+          <pre id="meta">stream 0 fps</pre>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

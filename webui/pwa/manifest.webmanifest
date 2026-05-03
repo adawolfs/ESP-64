@@ -1,0 +1,19 @@
+{
+  "name": "ESP32 Game Boy",
+  "short_name": "ESP32 Boy",
+  "description": "Installable ESP32 Game Boy web controller and screen portal.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#d7d5c7",
+  "theme_color": "#d7d5c7",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
