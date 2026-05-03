@@ -1,0 +1,6 @@
+## IDF Component Manager Manifest File
+## Pulls in the GC9A01 vendor LCD driver from Espressif's component registry.
+dependencies:
+  espressif/esp_lcd_gc9a01: "^2.0.0"
+  idf:
+    version: ">=6.0"
