@@ -8,6 +8,7 @@ set(N64_SRCS
     "gb_cartridge.cpp"
     "mbc1_mapper.cpp"
     "save_store.cpp"
+    "joybus_rmt.cpp"
     "pokemon_stadium_compat.cpp"
     "web_portal.cpp"
     "web_assets.S"

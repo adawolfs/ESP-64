@@ -8,6 +8,7 @@
 #include "gb_time.h"
 #include "n64_accessory.h"
 #include "n64_controller.h"
+#include "joybus_rmt.h"
 #include "n64_joybus.h"
 #include "pokemon_stadium_compat.h"
 #include "save_store.h"
@@ -18,14 +19,20 @@ namespace {
 constexpr const char *TAG = "n64_runtime";
 constexpr uint32_t JOYBUS_QUIET_BEFORE_DELAY_MS = 250;
 constexpr uint32_t IDLE_DELAY_INTERVAL_MS = 25;
-// TEMP(fix-controller-detection): serial dump of Joy-Bus counters for hardware
-// diagnosis. Watch with `pio device monitor` while plugged into the console.
-// Remove once detection is confirmed on hardware.
 constexpr uint32_t JOYBUS_DEBUG_LOG_INTERVAL_MS = 1000;
+constexpr uint32_t RMT_ACCESSORY_WEB_QUIET_MS = 500;
+constexpr uint32_t RMT_ACCESSORY_SAVE_QUIET_MS = 2500;
 uint32_t last_web_service_ms = 0;
 uint32_t last_joybus_activity_ms = 0;
 uint32_t last_idle_delay_ms = 0;
 uint32_t last_joybus_debug_ms = 0;
+uint32_t last_rmt_accessory_activity_ms = 0;
+
+#ifdef N64_JOYBUS_BITBANG
+constexpr bool USE_RMT_JOYBUS = false;
+#else
+constexpr bool USE_RMT_JOYBUS = true;
+#endif
 
 WebPortalConfig make_portal_config() {
   WebPortalConfig config;
@@ -46,10 +53,6 @@ void service_web(uint32_t now_ms) {
   last_web_service_ms = now_ms;
 }
 
-// TEMP(fix-controller-detection): periodically log Joy-Bus traffic counters so
-// detection problems are visible over serial without a connected web client.
-// status>0 means the console is probing the port; poll>0 means it accepted the
-// controller and is reading input; respFail>0 means replies are arriving late.
 void log_joybus_debug(uint32_t now_ms) {
   if (last_joybus_debug_ms != 0 &&
       now_ms - last_joybus_debug_ms < JOYBUS_DEBUG_LOG_INTERVAL_MS) {
@@ -64,9 +67,6 @@ void log_joybus_debug(uint32_t now_ms) {
            (unsigned long)d.accessory_reads, (unsigned long)d.accessory_writes,
            (unsigned long)d.malformed_frames, (unsigned long)d.timing_errors,
            (unsigned long)d.response_failures, (unsigned long)d.dropped_starts);
-  // TEMP(fix-controller-detection): Transfer Pak handshake visibility. powered/
-  // enabled flip as the console probes; bank selects the GB window; invalid>0
-  // means it addressed a register we don't map.
   const TransferPakStatus &p = transfer_pak_status();
   ESP_LOGI(TAG,
            "tpak powered=%d enabled=%d bank=%u status=0x%02X invalid=%lu "
@@ -77,10 +77,6 @@ void log_joybus_debug(uint32_t now_ms) {
            d.last_accessory_value, d.last_accessory_latency_us,
            gb_cartridge_status().save_loaded, gb_cartridge_save_dirty(),
            save_store_persisted());
-
-  // TEMP: dump the accessory access trace once per new burst so the exact
-  // Transfer Pak handshake/read sequence (address + first returned byte) is
-  // visible and comparable against the cartridge header.
   static uint32_t last_access_count = 0;
   const uint32_t acc_count = n64_joybus_access_count();
   if (acc_count != last_access_count) {
@@ -104,19 +100,29 @@ bool n64_runtime_init(void) {
     return false;
   }
 
-  if (!n64_joybus_init(board::PIN_N64_JOYBUS_DATA)) {
-    ESP_LOGE(TAG, "Joy-Bus GPIO init failed on GPIO%d",
-             board::PIN_N64_JOYBUS_DATA);
-    return false;
+  web_portal_mount_storage();
+  if (save_store_load()) {
+    ESP_LOGI(TAG, "using persisted cartridge save");
+  } else {
+    ESP_LOGI(TAG, "using embedded cartridge save");
   }
 
-  web_portal_mount_storage();
-  // TEMP(debug): the persisted SPIFFS save was being corrupted by console writes
-  // during failed GB-Tower attempts and then shadowing the good embedded .srm
-  // (trainer showed as "???"). Force the embedded save and clear the stale
-  // persisted copy until save persistence is trustworthy again.
-  save_store_reset();
-  ESP_LOGI(TAG, "using embedded cartridge save (persisted copy cleared)");
+  if (USE_RMT_JOYBUS) {
+    if (!joybus_rmt_init(board::PIN_N64_JOYBUS_DATA)) {
+      ESP_LOGE(TAG, "RMT Joy-Bus init failed on GPIO%d",
+               board::PIN_N64_JOYBUS_DATA);
+      return false;
+    }
+    ESP_LOGI(TAG, "Joy-Bus transport: RMT RX + immediate open-drain TX");
+  } else {
+    if (!n64_joybus_init(board::PIN_N64_JOYBUS_DATA)) {
+      ESP_LOGE(TAG, "Joy-Bus GPIO init failed on GPIO%d",
+               board::PIN_N64_JOYBUS_DATA);
+      return false;
+    }
+    ESP_LOGW(TAG, "Joy-Bus transport: bit-bang fallback");
+  }
+
   if (!web_portal_begin(make_portal_config())) {
     ESP_LOGE(TAG, "web portal start failed");
     return false;
@@ -130,8 +136,38 @@ bool n64_runtime_init(void) {
 }
 
 void n64_runtime_loop(void) {
-  const bool bus_activity = n64_joybus_service();
   const uint32_t now_ms = millis();
+  if (USE_RMT_JOYBUS) {
+    static uint32_t last_rmt_tx_read = 0;
+    static uint32_t last_rmt_tx_write = 0;
+    const bool bus_activity = joybus_rmt_loop(now_ms);
+    if (bus_activity) last_joybus_activity_ms = now_ms;
+
+    const JoybusRmtStats &rmt = joybus_rmt_stats();
+    if (rmt.tx_read != last_rmt_tx_read || rmt.tx_write != last_rmt_tx_write) {
+      last_rmt_tx_read = rmt.tx_read;
+      last_rmt_tx_write = rmt.tx_write;
+      last_rmt_accessory_activity_ms = now_ms;
+    }
+
+    const bool accessory_web_quiet =
+        last_rmt_accessory_activity_ms == 0 ||
+        now_ms - last_rmt_accessory_activity_ms >= RMT_ACCESSORY_WEB_QUIET_MS;
+    const bool accessory_save_quiet =
+        last_rmt_accessory_activity_ms == 0 ||
+        now_ms - last_rmt_accessory_activity_ms >= RMT_ACCESSORY_SAVE_QUIET_MS;
+
+    if (accessory_web_quiet) service_web(now_ms);
+    if (accessory_save_quiet) save_store_service(now_ms);
+
+    // RMT callbacks own the Joy-Bus response timing. The main task must still
+    // block briefly so the idle task can feed the watchdog during GB Tower's
+    // long accessory bursts; taskYIELD() can immediately reschedule main again.
+    vTaskDelay(1);
+    return;
+  }
+
+  const bool bus_activity = n64_joybus_service();
   if (bus_activity) last_joybus_activity_ms = now_ms;
 
   service_web(now_ms);
