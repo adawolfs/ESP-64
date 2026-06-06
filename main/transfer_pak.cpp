@@ -51,7 +51,10 @@ const TransferPakStatus &transfer_pak_status(void) { return state; }
 
 uint8_t transfer_pak_read_byte(uint16_t address) {
   state.reads++;
-  if ((address & 0xF000u) == 0x8000u) return state.powered ? 0x84 : 0x00;
+  // While the pak is disabled, every address reads back 0x00. The console relies
+  // on this to confirm the pak responds to the 0xFE disable probe.
+  if (!state.powered) return 0x00;
+  if ((address & 0xF000u) == 0x8000u) return 0x84;
   if ((address & 0xF000u) == 0xA000u) return state.bank;
   if ((address & 0xF000u) == 0xB000u) return state.status;
   if (address >= 0xC000u) {
@@ -72,7 +75,9 @@ uint8_t transfer_pak_read_byte(uint16_t address) {
 void transfer_pak_write_byte(uint16_t address, uint8_t value) {
   state.writes++;
   if ((address & 0xF000u) == 0x8000u) {
-    state.powered = (value & 0x01) != 0 || (value & 0x84) != 0;
+    // 0x84 enables (powers) the pak; anything else (e.g. 0xFE) disables it.
+    state.powered = (value == 0x84);
+    if (!state.powered) state.access_enabled = false;
     recompute_status();
     return;
   }
@@ -81,7 +86,8 @@ void transfer_pak_write_byte(uint16_t address, uint8_t value) {
     return;
   }
   if ((address & 0xF000u) == 0xB000u) {
-    state.access_enabled = (value & 0x01) != 0 || (value & 0x84) != 0;
+    // Bit 0 of the status register is the cartridge access-mode enable.
+    state.access_enabled = (value & 0x01) != 0;
     recompute_status();
     return;
   }
