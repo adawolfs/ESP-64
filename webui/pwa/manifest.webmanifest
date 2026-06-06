@@ -1,13 +1,13 @@
 {
-  "name": "ESP32 Game Boy",
-  "short_name": "ESP32 Boy",
-  "description": "Installable ESP32 Game Boy web controller and screen portal.",
+  "name": "espN64 Transfer Pak",
+  "short_name": "espN64",
+  "description": "Installable ESP32-C3 N64 controller and Transfer Pak dashboard.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
-  "background_color": "#d7d5c7",
-  "theme_color": "#d7d5c7",
+  "orientation": "any",
+  "background_color": "#101216",
+  "theme_color": "#171a1f",
   "icons": [
     {
       "src": "/icon.svg",

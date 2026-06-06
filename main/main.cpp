@@ -1,23 +1,23 @@
-#include "emulator_runtime.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gb_time.h"
+#include "n64_runtime.h"
 
 extern "C" void app_main(void) {
-  static const char *TAG = "gb";
+  static const char *TAG = "n64";
   delay(150);
 
-  const bool emulator_ready = emulator_init();
-  if (emulator_ready) {
-    ESP_LOGI(TAG, "GB ready");
+  const bool runtime_ready = n64_runtime_init();
+  if (runtime_ready) {
+    ESP_LOGI(TAG, "N64 controller/Transfer Pak ready");
   }
 
   while (true) {
-    if (!emulator_ready) {
+    if (!runtime_ready) {
       delay(1000);
       continue;
     }
-    emulator_run_frame();
+    n64_runtime_loop();
   }
 }

@@ -1,5 +1,5 @@
-const CACHE_NAME = 'esp32-gameboy-webui-v4';
-const APP_SHELL = ['/', '/index.html', '/manifest.webmanifest', '/icon.svg'];
+const CACHE_NAME = 'esp32-n64-transfer-pak-webui-v2';
+const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -26,10 +26,17 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        }
         return response;
       })
-      .catch(() => caches.match(request).then((cached) => cached || caches.match('/index.html')))
+      .catch(() => {
+        if (request.mode === 'navigate') {
+          return caches.match(request).then((cached) => cached || caches.match('./index.html'));
+        }
+        return caches.match(request).then((cached) => cached || Response.error());
+      })
   );
 });

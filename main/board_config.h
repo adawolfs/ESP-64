@@ -9,7 +9,15 @@
 
 namespace board {
 
-// Display (GC9A01 on SPI2)
+// N64 controller port
+#ifndef N64_JOYBUS_DATA_GPIO
+#define N64_JOYBUS_DATA_GPIO 4
+#endif
+
+static constexpr int PIN_N64_JOYBUS_DATA = N64_JOYBUS_DATA_GPIO;
+
+// Display (GC9A01 on SPI2) - retained only for legacy references while the
+// active build targets the N64 controller/Transfer Pak runtime.
 static constexpr int PIN_BACKLIGHT = 3;
 static constexpr int PIN_TFT_DC = 2;
 static constexpr int PIN_TFT_SCLK = 6;

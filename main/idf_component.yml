@@ -1,6 +1,5 @@
 ## IDF Component Manager Manifest File
-## Pulls in the GC9A01 vendor LCD driver from Espressif's component registry.
-dependencies:
-  espressif/esp_lcd_gc9a01: "^2.0.0"
-  idf:
-    version: ">=6.0"
+## The active N64 controller/Transfer Pak firmware has no external component
+## dependencies. Keep this manifest empty so PlatformIO's ESP-IDF 5.4 package
+## does not try to resolve the old display-era IDF 6/LCD requirements.
+dependencies: {}

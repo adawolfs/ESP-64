@@ -1,7 +1,8 @@
 {
-  "name": "esp32-gameboy-webui",
+  "name": "esp32-n64-transfer-pak-webui",
   "private": true,
   "version": "0.1.0",
+  "description": "Installable ESP32-C3 N64 controller and Transfer Pak dashboard.",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
