@@ -2,13 +2,17 @@
 
 #include <string.h>
 
+#include "esp_attr.h"
+
 namespace {
 N64AccessoryDebug debug = {};
 bool accessory_present = false;
 
-bool valid_block_size(size_t len) { return len > 0 && len <= TRANSFER_PAK_BLOCK_SIZE; }
+bool IRAM_ATTR valid_block_size(size_t len) {
+  return len > 0 && len <= TRANSFER_PAK_BLOCK_SIZE;
+}
 
-void malformed(uint8_t *status) {
+void IRAM_ATTR malformed(uint8_t *status) {
   debug.malformed++;
   if (status) *status = 0x40;
 }
@@ -23,8 +27,8 @@ void n64_accessory_init(void) {
 
 bool n64_accessory_present(void) { return accessory_present; }
 
-bool n64_accessory_read(uint16_t address, uint8_t *out, size_t len,
-                        uint8_t *status) {
+bool IRAM_ATTR n64_accessory_read(uint16_t address, uint8_t *out, size_t len,
+                                  uint8_t *status) {
   if (!out || !valid_block_size(len)) {
     malformed(status);
     return false;

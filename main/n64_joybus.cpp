@@ -1,5 +1,6 @@
 #include "n64_joybus.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -41,6 +42,27 @@ constexpr uint32_t DRAIN_MAX_CYCLES = 400 * CPU_CYCLES_PER_US;
 int data_gpio = -1;
 N64JoybusDebug debug = {};
 
+// Ring trace of recent accessory accesses (address + first data byte + R/W) so
+// the exact Transfer Pak handshake/read sequence and the bytes we return can be
+// compared against the real cartridge header. Written in the ISR, read from the
+// runtime loop (benign race on diagnostic data).
+struct AccessTraceEntry {
+  uint16_t addr;
+  uint8_t data;
+  uint8_t is_write;
+};
+constexpr uint32_t ACCESS_TRACE_LEN = 24;
+AccessTraceEntry access_trace[ACCESS_TRACE_LEN] = {};
+uint32_t access_trace_count = 0;
+
+void IRAM_ATTR record_access(uint16_t addr, uint8_t data, bool is_write) {
+  AccessTraceEntry &e = access_trace[access_trace_count % ACCESS_TRACE_LEN];
+  e.addr = addr;
+  e.data = data;
+  e.is_write = is_write ? 1 : 0;
+  access_trace_count++;
+}
+
 // Total byte count of a command frame for a given opcode, or 0 if the opcode is
 // unknown. Length-driven framing lets the reader return the instant the frame is
 // complete instead of waiting out the inter-bit idle timeout.
@@ -59,32 +81,52 @@ size_t command_length(uint8_t opcode) {
   }
 }
 
-void note_response_latency(uint32_t cmd_end_cycles) {
+void IRAM_ATTR note_response_latency(uint32_t cmd_end_cycles) {
   if (esp_cpu_get_cycle_count() - cmd_end_cycles >
       RESPONSE_WINDOW_US * CPU_CYCLES_PER_US) {
     debug.response_failures++;
   }
 }
 
-// N64 controller-accessory data CRC over a data block (polynomial 0x85). The
-// console appends/expects this byte on every Transfer Pak read and write and
-// rejects the accessory if it does not match, so it must be computed exactly.
-uint8_t accessory_data_crc(const uint8_t *data, size_t len) {
-  uint8_t crc = 0;
-  for (size_t i = 0; i <= len; ++i) {
-    for (int bit = 7; bit >= 0; --bit) {
-      const uint8_t xor_tap = (crc & 0x80) ? 0x85 : 0x00;
-      crc = static_cast<uint8_t>(crc << 1);
-      if (i < len && (data[i] & (1u << bit)) != 0) crc |= 0x01;
-      crc ^= xor_tap;
-    }
+// N64 controller-accessory data CRC (polynomial 0x85): one byte step of the
+// bit-serial reference — data enters at the LSB, feedback taps the MSB.
+uint8_t crc_step_byte(uint8_t crc, uint8_t value) {
+  for (int bit = 7; bit >= 0; --bit) {
+    const uint8_t xor_tap = (crc & 0x80) ? 0x85 : 0x00;
+    crc = static_cast<uint8_t>((crc << 1) | ((value >> bit) & 1u));
+    crc ^= xor_tap;
   }
   return crc;
 }
 
+// Byte-wise tables: because the CRC is linear, one byte step is
+// F(crc, value) = crc_table_crc[crc] ^ crc_table_data[value]. This replaces the
+// 264-iteration bit loop (~28 us in the ISR, which pushed accessory responses
+// out of the console window) with ~32 table lookups (~a few us).
+uint8_t crc_table_crc[256];
+uint8_t crc_table_data[256];
+
+void build_crc_tables(void) {
+  for (int i = 0; i < 256; ++i) {
+    crc_table_crc[i] = crc_step_byte(static_cast<uint8_t>(i), 0x00);
+    crc_table_data[i] = crc_step_byte(0x00, static_cast<uint8_t>(i));
+  }
+}
+
+// The console appends/expects this byte on every Transfer Pak read and write and
+// rejects the accessory if it does not match, so it must equal the reference.
+uint8_t IRAM_ATTR accessory_data_crc(const uint8_t *data, size_t len) {
+  uint8_t crc = 0;
+  for (size_t i = 0; i < len; ++i) {
+    crc = static_cast<uint8_t>(crc_table_crc[crc] ^ crc_table_data[data[i]]);
+  }
+  // Trailing virtual zero byte (the original loop ran i <= len).
+  return crc_table_crc[crc];
+}
+
 // The 16-bit accessory address carries a 5-bit CRC in its low bits; the real
 // block address is the upper 11 bits (also 32-byte aligned).
-inline uint16_t accessory_block_address(uint8_t hi, uint8_t lo) {
+inline uint16_t IRAM_ATTR accessory_block_address(uint8_t hi, uint8_t lo) {
   return static_cast<uint16_t>(((static_cast<uint16_t>(hi) << 8) | lo) & 0xFFE0);
 }
 
@@ -102,17 +144,17 @@ void IRAM_ATTR tx_bit(bool bit) {
   }
 }
 
-void tx_stop(void) {
+void IRAM_ATTR tx_stop(void) {
   n64_joybus_drive_low();
   delayMicroseconds(1);
   n64_joybus_release();
 }
 
-void tx_byte(uint8_t value) {
+void IRAM_ATTR tx_byte(uint8_t value) {
   for (int bit = 7; bit >= 0; --bit) tx_bit((value & (1u << bit)) != 0);
 }
 
-void tx_bytes(const uint8_t *data, size_t len) {
+void IRAM_ATTR tx_bytes(const uint8_t *data, size_t len) {
   for (size_t i = 0; i < len; ++i) tx_byte(data[i]);
   tx_stop();
 }
@@ -207,7 +249,8 @@ bool read_command_frame(uint8_t *bytes, size_t *byte_count) {
   return *byte_count == expected;
 }
 
-void handle_command(const uint8_t *cmd, size_t len, uint32_t cmd_end_cycles) {
+void IRAM_ATTR handle_command(const uint8_t *cmd, size_t len,
+                             uint32_t cmd_end_cycles) {
   if (!cmd || len == 0) return;
 
   switch (cmd[0]) {
@@ -246,7 +289,10 @@ void handle_command(const uint8_t *cmd, size_t len, uint32_t cmd_end_cycles) {
       // The trailing byte is the data CRC of the block, not the pak status.
       response[TRANSFER_PAK_BLOCK_SIZE] =
           accessory_data_crc(response, TRANSFER_PAK_BLOCK_SIZE);
+      debug.last_accessory_latency_us = static_cast<uint16_t>(
+          (esp_cpu_get_cycle_count() - cmd_end_cycles) / CPU_CYCLES_PER_US);
       tx_bytes(response, TRANSFER_PAK_BLOCK_SIZE + 1);
+      record_access(address, response[0], false);
       break;
     }
     case 0x03: {
@@ -259,11 +305,15 @@ void handle_command(const uint8_t *cmd, size_t len, uint32_t cmd_end_cycles) {
       debug.last_accessory_addr = address;
       debug.last_accessory_value = cmd[3];
       debug.last_accessory_is_write = true;
+      // Reply with the data CRC *before* applying the write, so the response
+      // lands inside the console's window; the side effects can wait.
+      const uint8_t crc = accessory_data_crc(cmd + 3, TRANSFER_PAK_BLOCK_SIZE);
+      debug.last_accessory_latency_us = static_cast<uint16_t>(
+          (esp_cpu_get_cycle_count() - cmd_end_cycles) / CPU_CYCLES_PER_US);
+      tx_bytes(&crc, 1);
+      record_access(address, cmd[3], true);
       uint8_t status = 0;
       n64_accessory_write(address, cmd + 3, TRANSFER_PAK_BLOCK_SIZE, &status);
-      // The response to a write is the data CRC of the written block.
-      const uint8_t crc = accessory_data_crc(cmd + 3, TRANSFER_PAK_BLOCK_SIZE);
-      tx_bytes(&crc, 1);
       break;
     }
     default:
@@ -306,6 +356,7 @@ void IRAM_ATTR joybus_isr(void *arg) {
 bool n64_joybus_init(int gpio_num) {
   data_gpio = gpio_num;
   memset(&debug, 0, sizeof(debug));
+  build_crc_tables();
 
   gpio_config_t cfg = {};
   cfg.pin_bit_mask = 1ULL << gpio_num;
@@ -329,15 +380,15 @@ bool n64_joybus_init(int gpio_num) {
   return true;
 }
 
-void n64_joybus_drive_low(void) {
+void IRAM_ATTR n64_joybus_drive_low(void) {
   if (data_gpio >= 0) gpio_set_level(static_cast<gpio_num_t>(data_gpio), 0);
 }
 
-void n64_joybus_release(void) {
+void IRAM_ATTR n64_joybus_release(void) {
   if (data_gpio >= 0) gpio_set_level(static_cast<gpio_num_t>(data_gpio), 1);
 }
 
-int n64_joybus_read_level(void) {
+int IRAM_ATTR n64_joybus_read_level(void) {
   if (data_gpio < 0) return 1;
   return gpio_get_level(static_cast<gpio_num_t>(data_gpio));
 }
@@ -350,3 +401,18 @@ bool n64_joybus_service(void) {
 }
 
 const N64JoybusDebug &n64_joybus_debug(void) { return debug; }
+
+uint32_t n64_joybus_access_count(void) { return access_trace_count; }
+
+void n64_joybus_format_access_trace(char *out, size_t cap) {
+  if (!out || cap == 0) return;
+  size_t pos = 0;
+  const uint32_t count = access_trace_count;
+  const uint32_t start = count > ACCESS_TRACE_LEN ? count - ACCESS_TRACE_LEN : 0;
+  for (uint32_t i = start; i < count && pos + 12 < cap; ++i) {
+    const AccessTraceEntry &e = access_trace[i % ACCESS_TRACE_LEN];
+    pos += snprintf(out + pos, cap - pos, "%c%04X=%02X ", e.is_write ? 'W' : 'R',
+                    e.addr, e.data);
+  }
+  out[pos < cap ? pos : cap - 1] = '\0';
+}

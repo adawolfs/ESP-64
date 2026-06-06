@@ -7,6 +7,7 @@ set(N64_SRCS
     "transfer_pak.cpp"
     "gb_cartridge.cpp"
     "mbc1_mapper.cpp"
+    "save_store.cpp"
     "pokemon_stadium_compat.cpp"
     "web_portal.cpp"
     "web_assets.S"

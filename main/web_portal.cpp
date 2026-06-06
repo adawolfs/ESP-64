@@ -25,6 +25,7 @@
 #include "n64_joybus.h"
 #include "nvs_flash.h"
 #include "pokemon_stadium_compat.h"
+#include "save_store.h"
 #include "transfer_pak.h"
 
 namespace {
@@ -346,6 +347,7 @@ size_t build_state_json(char *out, size_t out_cap) {
       "\"transferPak\":{\"powered\":%s,\"accessEnabled\":%s,\"bank\":%u,"
       "\"status\":%u,\"reads\":%lu,\"writes\":%lu,\"invalidAccesses\":%lu},"
       "\"cartridge\":{\"romLoaded\":%s,\"saveLoaded\":%s,\"saveStubbed\":%s,"
+      "\"saveDirty\":%s,\"savePersisted\":%s,"
       "\"boundsFault\":%s,\"title\":\"%s\",\"type\":%u,\"romBanks\":%u,"
       "\"ramBanks\":%u,\"headerChecksum\":%u},"
       "\"compat\":{\"accessoryPresent\":%s,\"romHeaderOk\":%s,"
@@ -365,6 +367,8 @@ size_t build_state_json(char *out, size_t out_cap) {
       (unsigned long)pak.invalid_accesses, cart.rom_loaded ? "true" : "false",
       cart.save_loaded ? "true" : "false",
       cart.save_stubbed ? "true" : "false",
+      gb_cartridge_save_dirty() ? "true" : "false",
+      save_store_persisted() ? "true" : "false",
       cart.bounds_fault ? "true" : "false", title_esc, cart.cartridge_type,
       cart.rom_bank_count, cart.ram_bank_count, cart.header_checksum,
       compat.accessory_present ? "true" : "false",
@@ -495,6 +499,24 @@ esp_err_t handle_api_state(httpd_req_t *req) {
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   return httpd_resp_send(req, buf, n);
+}
+
+esp_err_t handle_api_save(httpd_req_t *req) {
+  httpd_resp_set_type(req, "application/octet-stream");
+  httpd_resp_set_hdr(req, "Content-Disposition",
+                     "attachment; filename=\"save.srm\"");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  return httpd_resp_send(
+      req, reinterpret_cast<const char *>(gb_cartridge_save_data()),
+      gb_cartridge_save_size());
+}
+
+esp_err_t handle_api_save_reset(httpd_req_t *req) {
+  const bool ok = save_store_reset();
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  httpd_resp_sendstr(req, ok ? "{\"reset\":true}" : "{\"reset\":false}");
+  return ESP_OK;
 }
 
 esp_err_t handle_api_input(httpd_req_t *req) {
@@ -735,6 +757,16 @@ bool start_http_server() {
   uri_input_post.method = HTTP_POST;
   uri_input_post.handler = handle_api_input;
 
+  static httpd_uri_t uri_save = {};
+  uri_save.uri = "/api/save";
+  uri_save.method = HTTP_GET;
+  uri_save.handler = handle_api_save;
+
+  static httpd_uri_t uri_save_reset = {};
+  uri_save_reset.uri = "/api/save_reset";
+  uri_save_reset.method = HTTP_POST;
+  uri_save_reset.handler = handle_api_save_reset;
+
   static httpd_uri_t uri_ws = {};
   uri_ws.uri = "/ws";
   uri_ws.method = HTTP_GET;
@@ -750,6 +782,8 @@ bool start_http_server() {
   httpd_register_uri_handler(server, &uri_state);
   httpd_register_uri_handler(server, &uri_input_state);
   httpd_register_uri_handler(server, &uri_input_post);
+  httpd_register_uri_handler(server, &uri_save);
+  httpd_register_uri_handler(server, &uri_save_reset);
   httpd_register_uri_handler(server, &uri_ws);
   httpd_register_uri_handler(server, &uri_static);
   httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handle_not_found);

@@ -10,6 +10,7 @@
 #include "n64_controller.h"
 #include "n64_joybus.h"
 #include "pokemon_stadium_compat.h"
+#include "save_store.h"
 #include "transfer_pak.h"
 #include "web_portal.h"
 
@@ -69,11 +70,25 @@ void log_joybus_debug(uint32_t now_ms) {
   const TransferPakStatus &p = transfer_pak_status();
   ESP_LOGI(TAG,
            "tpak powered=%d enabled=%d bank=%u status=0x%02X invalid=%lu "
-           "lastAcc=%c@0x%04X=0x%02X",
+           "lastAcc=%c@0x%04X=0x%02X lat=%uus save[L%d D%d P%d]",
            p.powered, p.access_enabled, p.bank, p.status,
            (unsigned long)p.invalid_accesses,
            d.last_accessory_is_write ? 'W' : 'R', d.last_accessory_addr,
-           d.last_accessory_value);
+           d.last_accessory_value, d.last_accessory_latency_us,
+           gb_cartridge_status().save_loaded, gb_cartridge_save_dirty(),
+           save_store_persisted());
+
+  // TEMP: dump the accessory access trace once per new burst so the exact
+  // Transfer Pak handshake/read sequence (address + first returned byte) is
+  // visible and comparable against the cartridge header.
+  static uint32_t last_access_count = 0;
+  const uint32_t acc_count = n64_joybus_access_count();
+  if (acc_count != last_access_count) {
+    last_access_count = acc_count;
+    char trace[320];
+    n64_joybus_format_access_trace(trace, sizeof(trace));
+    ESP_LOGI(TAG, "acc[%lu] %s", (unsigned long)acc_count, trace);
+  }
 }
 }  // namespace
 
@@ -96,6 +111,12 @@ bool n64_runtime_init(void) {
   }
 
   web_portal_mount_storage();
+  // TEMP(debug): the persisted SPIFFS save was being corrupted by console writes
+  // during failed GB-Tower attempts and then shadowing the good embedded .srm
+  // (trainer showed as "???"). Force the embedded save and clear the stale
+  // persisted copy until save persistence is trustworthy again.
+  save_store_reset();
+  ESP_LOGI(TAG, "using embedded cartridge save (persisted copy cleared)");
   if (!web_portal_begin(make_portal_config())) {
     ESP_LOGE(TAG, "web portal start failed");
     return false;
@@ -114,6 +135,7 @@ void n64_runtime_loop(void) {
   if (bus_activity) last_joybus_activity_ms = now_ms;
 
   service_web(now_ms);
+  save_store_service(now_ms);
   log_joybus_debug(now_ms);
 
   const bool bus_quiet =

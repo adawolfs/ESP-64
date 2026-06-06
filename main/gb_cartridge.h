@@ -22,11 +22,23 @@ struct GbCartridgeStatus {
 void gb_cartridge_init(void);
 const GbCartridgeStatus &gb_cartridge_status(void);
 uint8_t gb_cartridge_read_rom(size_t offset);
+void gb_cartridge_read_rom_block(size_t offset, uint8_t *out, size_t len);
 uint8_t gb_cartridge_read_mapped_rom(const Mbc1Mapper *mapper,
                                      uint16_t gb_address);
 uint8_t gb_cartridge_read_mapped_ram(const Mbc1Mapper *mapper,
                                      uint16_t gb_address);
-void gb_cartridge_note_volatile_save_write(uint16_t gb_address, uint8_t value);
+void gb_cartridge_write_mapped_ram(const Mbc1Mapper *mapper, uint16_t gb_address,
+                                   uint8_t value);
+
+// Cartridge save RAM access for persistence/export.
+const uint8_t *gb_cartridge_save_data(void);
+size_t gb_cartridge_save_size(void);
+bool gb_cartridge_save_dirty(void);
+uint32_t gb_cartridge_save_write_seq(void);
+void gb_cartridge_mark_save_persisted(void);
+// Replace the save RAM from a persisted copy (size must match the RAM size).
+bool gb_cartridge_load_save(const uint8_t *data, size_t len);
+
 bool gb_cartridge_header_self_test(void);
 
 #endif
