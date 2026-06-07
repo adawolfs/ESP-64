@@ -23,7 +23,7 @@ constexpr uint8_t TPAK_STATUS_POWERED = 0x80;       // pak powered on
 bool is_resetting = false;
 bool was_reset = false;
 
-void mark_cartridge_reset(void) {
+void IRAM_ATTR mark_cartridge_reset(void) {
   is_resetting = true;
   was_reset = true;
 }
@@ -41,7 +41,7 @@ bool IRAM_ATTR cartridge_enabled(void) {
 // Rebuilds the status byte from the current pak state. The cartridge is
 // permanently fitted, so REMOVED stays clear; READY is reported only once the
 // console has both powered the pak and enabled access.
-void recompute_status(void) {
+void IRAM_ATTR recompute_status(void) {
   uint8_t value = 0;
   if (state.powered) {
     value |= TPAK_STATUS_POWERED;
@@ -54,7 +54,7 @@ void recompute_status(void) {
   state.status = value;
 }
 
-void mark_invalid(void) {
+void IRAM_ATTR mark_invalid(void) {
   state.invalid_accesses++;
   state.status = TPAK_STATUS_REMOVED;
 }
@@ -73,7 +73,7 @@ void transfer_pak_init(void) {
   was_reset = false;
 }
 
-const TransferPakStatus &transfer_pak_status(void) { return state; }
+const TransferPakStatus &IRAM_ATTR transfer_pak_status(void) { return state; }
 
 uint8_t IRAM_ATTR transfer_pak_read_byte(uint16_t address) {
   state.reads++;
@@ -108,7 +108,7 @@ uint8_t IRAM_ATTR transfer_pak_read_byte(uint16_t address) {
   return 0xFF;
 }
 
-void transfer_pak_write_byte(uint16_t address, uint8_t value) {
+void IRAM_ATTR transfer_pak_write_byte(uint16_t address, uint8_t value) {
   state.writes++;
   if ((address & 0xF000u) == 0x8000u) {
     // 0x84 enables (powers) the pak; anything else (e.g. 0xFE) disables it.
@@ -176,8 +176,8 @@ void IRAM_ATTR transfer_pak_read_block(uint16_t address, uint8_t *out,
   }
 }
 
-void transfer_pak_write_block(uint16_t address, const uint8_t *data,
-                              size_t len) {
+void IRAM_ATTR transfer_pak_write_block(uint16_t address, const uint8_t *data,
+                                       size_t len) {
   if (!data) return;
   for (size_t i = 0; i < len; ++i) {
     transfer_pak_write_byte(static_cast<uint16_t>(address + i), data[i]);

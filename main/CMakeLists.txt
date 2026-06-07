@@ -8,6 +8,7 @@ set(N64_SRCS
     "gb_cartridge.cpp"
     "mbc1_mapper.cpp"
     "save_store.cpp"
+    "power_monitor.cpp"
     "joybus_rmt.cpp"
     "pokemon_stadium_compat.cpp"
     "web_portal.cpp"
@@ -20,7 +21,7 @@ idf_component_register(
     SRCS ${N64_SRCS}
     INCLUDE_DIRS "." "core"
     REQUIRES driver esp_wifi esp_event esp_netif esp_http_server
-             esp_timer spiffs nvs_flash
+             esp_timer spiffs nvs_flash esp_partition
 )
 
 if(DEFINED GB_ENABLE_AUDIO)

@@ -39,8 +39,8 @@ bool IRAM_ATTR n64_accessory_read(uint16_t address, uint8_t *out, size_t len,
   return true;
 }
 
-bool n64_accessory_write(uint16_t address, const uint8_t *data, size_t len,
-                         uint8_t *status) {
+bool IRAM_ATTR n64_accessory_write(uint16_t address, const uint8_t *data,
+                                   size_t len, uint8_t *status) {
   if (!data || !valid_block_size(len)) {
     malformed(status);
     return false;

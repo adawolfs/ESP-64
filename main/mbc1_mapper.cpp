@@ -29,7 +29,8 @@ void mbc1_mapper_init(Mbc1Mapper *mapper, uint8_t cartridge_type,
   mapper->ram_bank_count = ram_bank_count;
 }
 
-void mbc1_mapper_write(Mbc1Mapper *mapper, uint16_t address, uint8_t value) {
+void IRAM_ATTR mbc1_mapper_write(Mbc1Mapper *mapper, uint16_t address,
+                                uint8_t value) {
   if (!mapper) return;
   if (is_mbc5(mapper->cartridge_type)) {
     if (address < 0x2000) {

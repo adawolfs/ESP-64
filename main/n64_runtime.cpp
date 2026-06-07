@@ -11,6 +11,7 @@
 #include "joybus_rmt.h"
 #include "n64_joybus.h"
 #include "pokemon_stadium_compat.h"
+#include "power_monitor.h"
 #include "save_store.h"
 #include "transfer_pak.h"
 #include "web_portal.h"
@@ -108,6 +109,11 @@ bool n64_runtime_init(void) {
     ESP_LOGI(TAG, "using embedded cartridge save (%s)",
              save_store_load_result_name(save_store_status().load_result));
   }
+  // Adopt a save captured during a previous power-loss (if any), then ensure the
+  // emergency slot is armed for the next ride-down.
+  if (save_store_recover_power_loss_slot()) {
+    ESP_LOGI(TAG, "recovered save from power-loss emergency slot");
+  }
 
   if (USE_RMT_JOYBUS) {
     if (!joybus_rmt_init(board::PIN_N64_JOYBUS_DATA)) {
@@ -129,6 +135,9 @@ bool n64_runtime_init(void) {
     ESP_LOGE(TAG, "web portal start failed");
     return false;
   }
+
+  // Arm the power-loss monitor so an abrupt console power-off commits the save.
+  power_monitor_init();
 
   const PokemonStadiumCompatStatus compat = pokemon_stadium_compat_status();
   ESP_LOGI(TAG, "N64 runtime ready ip=%s title=%s accessory=%d header=%d",
@@ -155,6 +164,10 @@ void n64_runtime_loop(void) {
     const bool accessory_web_quiet =
         last_rmt_accessory_activity_ms == 0 ||
         now_ms - last_rmt_accessory_activity_ms >= RMT_ACCESSORY_WEB_QUIET_MS;
+    // Only flush when the bus is fully idle. Flushing while the console is still
+    // accessing the cartridge (reads OR writes) stalls the bit-bang response path
+    // during the SPIFFS write and breaks the Transfer Pak connector check; an
+    // all-quiet window cannot overlap an active console access sequence.
     const bool accessory_save_quiet =
         last_rmt_accessory_activity_ms == 0 ||
         now_ms - last_rmt_accessory_activity_ms >= RMT_ACCESSORY_SAVE_QUIET_MS;

@@ -361,7 +361,8 @@ size_t build_state_json(char *out, size_t out_cap) {
       "\"saveFlushResult\":\"%s\",\"saveLastFlushOk\":%s,"
       "\"saveFlushCount\":%lu,\"saveFailedFlushCount\":%lu,"
       "\"saveLastPersistedSeq\":%lu,\"saveLastChangeMs\":%lu,"
-      "\"saveLastFlushMs\":%lu,\"saveLastLoadSize\":%u},"
+      "\"saveLastFlushMs\":%lu,\"saveLastLoadSize\":%u,"
+      "\"saveFlushReason\":\"%s\"},"
       "\"compat\":{\"accessoryPresent\":%s,\"romHeaderOk\":%s,"
       "\"saveReadOnlyOrStubbed\":%s},"
       "\"debug\":{\"joybusStatus\":%lu,\"joybusPoll\":%lu,"
@@ -396,6 +397,7 @@ size_t build_state_json(char *out, size_t out_cap) {
       (unsigned long)store.last_change_ms,
       (unsigned long)store.last_flush_ms,
       (unsigned)store.last_load_size,
+      save_store_flush_reason_name(store.flush_reason),
       compat.accessory_present ? "true" : "false",
       compat.rom_header_ok ? "true" : "false",
       compat.save_read_only_or_stubbed ? "true" : "false",
@@ -669,7 +671,11 @@ bool mount_spiffs() {
   conf.base_path = board::SPIFFS_MOUNT;
   conf.partition_label = "storage";
   conf.max_files = 6;
-  conf.format_if_mount_failed = false;
+  // Format on mount failure so the storage partition self-heals after a chip
+  // erase or a partition-table resize (otherwise the FS never exists and save
+  // writes fail with "temp open failed"). The web UI also has an embedded
+  // fallback, so a freshly-formatted (empty) FS still serves the portal.
+  conf.format_if_mount_failed = true;
   esp_err_t err = esp_vfs_spiffs_register(&conf);
   if (err == ESP_ERR_INVALID_STATE) return true;
   if (err != ESP_OK) {

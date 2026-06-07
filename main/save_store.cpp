@@ -8,6 +8,8 @@
 
 #include "board_config.h"
 #include "esp_log.h"
+#include "esp_partition.h"
+#include "esp_rom_crc.h"
 #include "gb_cartridge.h"
 
 namespace {
@@ -20,6 +22,40 @@ SaveStoreStatus status = {};
 bool seq_initialized = false;
 uint32_t last_seq = 0;
 bool dirty_logged = false;
+
+// --- Emergency power-loss save slot (raw flash partition) ---------------------
+// Layout: [sector 0] header, [sectors 1..] save body. Program-only on power loss
+// (the slot is pre-erased), merged into save.srm on the next boot.
+constexpr const char *EMG_PARTITION_LABEL = "emgsave";
+constexpr esp_partition_subtype_t EMG_PARTITION_SUBTYPE =
+    static_cast<esp_partition_subtype_t>(0x40);
+constexpr uint32_t EMG_MAGIC = 0x53474D45u;  // 'E''M''G''S'
+constexpr uint16_t EMG_VERSION = 1;
+constexpr size_t EMG_BODY_OFFSET = 0x1000;  // body starts at sector 1
+
+struct EmgSlotHeader {
+  uint32_t magic;
+  uint16_t version;
+  uint16_t reserved;
+  uint32_t write_seq;
+  uint32_t length;
+  uint32_t crc32;
+};
+
+bool emg_slot_armed = false;
+
+const esp_partition_t *emg_partition(void) {
+  static const esp_partition_t *part = nullptr;
+  static bool searched = false;
+  if (!searched) {
+    searched = true;
+    part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA,
+                                    EMG_PARTITION_SUBTYPE, EMG_PARTITION_LABEL);
+    if (!part) ESP_LOGW(TAG, "emergency save partition '%s' not found",
+                        EMG_PARTITION_LABEL);
+  }
+  return part;
+}
 
 const char *save_path(void) {
   static char path[160];
@@ -59,8 +95,17 @@ bool close_checked(FILE *f) {
   return fclose(f) == 0;
 }
 
-bool persist_now(uint32_t now_ms) {
+// Sets the flush-active flag for the lifetime of the flash write so the RMT ISR
+// returns 0xFF for ROM reads (ROM is in flash, unreadable with the cache off)
+// instead of faulting, then clears it on every exit path.
+struct FlushGuard {
+  FlushGuard() { gb_cartridge_set_flush_active(true); }
+  ~FlushGuard() { gb_cartridge_set_flush_active(false); }
+};
+
+bool persist_now(uint32_t now_ms, SaveStoreFlushReason reason) {
   const size_t size = gb_cartridge_save_size();
+  FlushGuard flush_guard;
   remove(tmp_path());
   FILE *f = fopen(tmp_path(), "wb");
   if (!f) {
@@ -112,6 +157,7 @@ bool persist_now(uint32_t now_ms) {
   status.pending = false;
   status.last_flush_ok = true;
   status.flush_result = SAVE_STORE_FLUSH_OK;
+  status.flush_reason = reason;
   status.flush_count++;
   status.last_flush_ms = now_ms;
   status.last_persisted_seq = gb_cartridge_save_write_seq();
@@ -190,7 +236,8 @@ bool save_store_load(void) {
   return ok;
 }
 
-void save_store_service(uint32_t now_ms, bool allow_flash_write) {
+void save_store_service(uint32_t now_ms, bool allow_flash_write,
+                        SaveStoreFlushReason reason) {
   const uint32_t seq = gb_cartridge_save_write_seq();
   if (!seq_initialized || seq != last_seq) {
     seq_initialized = true;
@@ -215,7 +262,100 @@ void save_store_service(uint32_t now_ms, bool allow_flash_write) {
   if (!status.pending) return;
   if (!allow_flash_write) return;
   if (now_ms - status.last_change_ms < PERSIST_DEBOUNCE_MS) return;
-  persist_now(now_ms);
+  persist_now(now_ms, reason);
+}
+
+bool save_store_flush_on_power_loss(void) {
+  if (!gb_cartridge_save_dirty()) return false;
+  const esp_partition_t *p = emg_partition();
+  if (!p) return false;
+  const size_t size = gb_cartridge_save_size();
+  if (EMG_BODY_OFFSET + size > p->size) {
+    ESP_LOGW(TAG, "emergency slot too small for save");
+    return false;
+  }
+  const uint8_t *data = gb_cartridge_save_data();
+  // Program-only writes into the pre-erased slot. Body first, then the header, so
+  // a torn/incomplete write leaves the header invalid and is rejected on boot.
+  if (esp_partition_write(p, EMG_BODY_OFFSET, data, size) != ESP_OK) {
+    status.failed_flush_count++;
+    return false;
+  }
+  EmgSlotHeader h = {};
+  h.magic = EMG_MAGIC;
+  h.version = EMG_VERSION;
+  h.write_seq = gb_cartridge_save_write_seq();
+  h.length = static_cast<uint32_t>(size);
+  h.crc32 = esp_rom_crc32_le(0, data, size);
+  if (esp_partition_write(p, 0, &h, sizeof(h)) != ESP_OK) {
+    status.failed_flush_count++;
+    return false;
+  }
+  emg_slot_armed = false;
+  status.last_flush_ok = true;
+  status.flush_result = SAVE_STORE_FLUSH_OK;
+  status.flush_reason = SAVE_STORE_FLUSH_REASON_POWER_LOSS;
+  status.flush_count++;
+  ESP_LOGW(TAG, "power-loss save written to emergency slot (%u bytes seq=%lu)",
+           (unsigned)size, (unsigned long)h.write_seq);
+  return true;
+}
+
+void save_store_arm_power_loss_slot(void) {
+  const esp_partition_t *p = emg_partition();
+  if (!p) return;
+  if (esp_partition_erase_range(p, 0, p->size) == ESP_OK) {
+    emg_slot_armed = true;
+  } else {
+    emg_slot_armed = false;
+    ESP_LOGW(TAG, "emergency slot erase (arm) failed");
+  }
+}
+
+bool save_store_power_loss_slot_armed(void) { return emg_slot_armed; }
+
+bool save_store_recover_power_loss_slot(void) {
+  const esp_partition_t *p = emg_partition();
+  if (!p) return false;
+
+  EmgSlotHeader h = {};
+  if (esp_partition_read(p, 0, &h, sizeof(h)) != ESP_OK) return false;
+
+  // Blank (all 0xFF) header => already armed, nothing to recover.
+  bool blank = true;
+  const uint8_t *hb = reinterpret_cast<const uint8_t *>(&h);
+  for (size_t i = 0; i < sizeof(h); ++i) {
+    if (hb[i] != 0xFF) { blank = false; break; }
+  }
+  if (blank) {
+    emg_slot_armed = true;
+    return false;
+  }
+
+  const size_t size = gb_cartridge_save_size();
+  bool valid = h.magic == EMG_MAGIC && h.version == EMG_VERSION &&
+               h.length == size && EMG_BODY_OFFSET + size <= p->size;
+  uint8_t *body = valid ? static_cast<uint8_t *>(malloc(size)) : nullptr;
+  if (valid && body && esp_partition_read(p, EMG_BODY_OFFSET, body, size) ==
+                            ESP_OK &&
+      esp_rom_crc32_le(0, body, size) == h.crc32 &&
+      gb_cartridge_load_save(body, size)) {
+    free(body);
+    // Slot wins: it captured an in-game save that never reached save.srm.
+    persist_now(0, SAVE_STORE_FLUSH_REASON_BUS_QUIET);
+    seq_initialized = true;
+    last_seq = gb_cartridge_save_write_seq();
+    status.observed_write_seq = last_seq;
+    save_store_arm_power_loss_slot();
+    ESP_LOGI(TAG, "recovered power-loss save from emergency slot (seq=%lu)",
+             (unsigned long)h.write_seq);
+    return true;
+  }
+  if (body) free(body);
+  // Non-blank but invalid/unreadable: re-arm so it is ready next time.
+  ESP_LOGW(TAG, "emergency slot invalid; re-arming");
+  save_store_arm_power_loss_slot();
+  return false;
 }
 
 bool save_store_reset(void) {
@@ -254,6 +394,16 @@ const char *save_store_flush_result_name(SaveStoreFlushResult result) {
     case SAVE_STORE_FLUSH_SHORT_WRITE: return "short_write";
     case SAVE_STORE_FLUSH_CLOSE_FAILED: return "close_failed";
     case SAVE_STORE_FLUSH_RENAME_FAILED: return "rename_failed";
+  }
+  return "unknown";
+}
+
+const char *save_store_flush_reason_name(SaveStoreFlushReason reason) {
+  switch (reason) {
+    case SAVE_STORE_FLUSH_REASON_NONE: return "none";
+    case SAVE_STORE_FLUSH_REASON_WRITE_BURST_SETTLE: return "write_burst_settle";
+    case SAVE_STORE_FLUSH_REASON_BUS_QUIET: return "bus_quiet";
+    case SAVE_STORE_FLUSH_REASON_POWER_LOSS: return "power_loss";
   }
   return "unknown";
 }

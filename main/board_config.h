@@ -16,6 +16,19 @@ namespace board {
 
 static constexpr int PIN_N64_JOYBUS_DATA = N64_JOYBUS_DATA_GPIO;
 
+// Power-loss sense input for the emergency-save monitor (GPIO3, also ADC1_CH3).
+// Circuit: an open-drain comparator senses the console-side 3V3 (before the
+// hold-up cap's series/ideal diode) and drives this line — idle-high while
+// powered, pulled LOW when input power drops. Internal pull-up keeps an
+// unconnected line high (no false trigger); a falling edge triggers the flush.
+// Set to -1 to disable the monitor.
+#ifndef POWER_LOSS_SENSE_GPIO
+#define POWER_LOSS_SENSE_GPIO -1
+#endif
+static constexpr int PIN_POWER_LOSS_SENSE = POWER_LOSS_SENSE_GPIO;
+// Logic level that indicates power is being lost (active-low by default).
+static constexpr int POWER_LOSS_ACTIVE_LEVEL = 0;
+
 // Display (GC9A01 on SPI2) - retained only for legacy references while the
 // active build targets the N64 controller/Transfer Pak runtime.
 static constexpr int PIN_BACKLIGHT = 3;

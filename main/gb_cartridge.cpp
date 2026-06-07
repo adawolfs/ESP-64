@@ -17,6 +17,11 @@ constexpr size_t kSaveRamSize = 32u * 1024u;
 GbCartridgeStatus status = {};
 uint8_t save_stub[kSaveRamSize] = {};
 bool save_dirty = false;
+// Set while a SPIFFS flush is in progress. During a flash write the cache is
+// disabled, so the ROM (which lives in flash) is unreadable from the RMT ISR.
+// Reads in that window return 0xFF instead of faulting on cache-disabled flash.
+// Lives in DRAM and is only ever a plain flag, so it is ISR/cache-off safe.
+volatile bool flush_active = false;
 uint32_t save_write_seq = 0;  // bumped on each actual save byte change
 uint32_t save_changed_bytes = 0;
 uint32_t last_save_offset = 0xFFFFFFFFu;
@@ -99,6 +104,8 @@ GbCartridgeSaveDebug gb_cartridge_save_debug(void) {
 }
 
 uint8_t IRAM_ATTR gb_cartridge_read_rom(size_t offset) {
+  // ROM is in flash; unreadable while a flush has the cache disabled.
+  if (flush_active) return 0xFF;
   if (!status.rom_loaded || offset >= static_cast<size_t>(gb_rom_size)) {
     status.bounds_fault = true;
     return 0xFF;
@@ -109,6 +116,13 @@ uint8_t IRAM_ATTR gb_cartridge_read_rom(size_t offset) {
 void IRAM_ATTR gb_cartridge_read_rom_block(size_t offset, uint8_t *out,
                                            size_t len) {
   if (!out) return;
+  // ROM is in flash; unreadable (and memcpy/memset from flash could fault) while
+  // a flush has the cache disabled. Fill by hand to avoid a flash-resident libc
+  // call in this window.
+  if (flush_active) {
+    for (size_t i = 0; i < len; ++i) out[i] = 0xFF;
+    return;
+  }
   // Bulk copy a contiguous ROM run in one shot. Reading the cartridge byte by
   // byte through the mapper was far too slow inside the Joy-Bus response window
   // (~69 us for 32 bytes); a single memcpy keeps it well under the deadline.
@@ -168,6 +182,10 @@ size_t gb_cartridge_save_size(void) { return sizeof(save_stub); }
 bool gb_cartridge_save_dirty(void) { return save_dirty; }
 
 void gb_cartridge_mark_save_persisted(void) { save_dirty = false; }
+
+void IRAM_ATTR gb_cartridge_set_flush_active(bool active) {
+  flush_active = active;
+}
 
 bool gb_cartridge_load_save(const uint8_t *data, size_t len) {
   if (!data || len != sizeof(save_stub)) return false;
