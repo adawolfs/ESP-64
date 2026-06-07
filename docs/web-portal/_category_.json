@@ -1,0 +1,11 @@
+{
+  "label": "Web Portal",
+  "position": 5,
+  "collapsible": true,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "Web Portal",
+    "description": "The Wi-Fi SoftAP, HTTP/WebSocket server, and the REST endpoints for input, ROM, and save management."
+  }
+}

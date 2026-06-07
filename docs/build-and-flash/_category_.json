@@ -1,0 +1,11 @@
+{
+  "label": "Build & Flash",
+  "position": 6,
+  "collapsible": true,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "Build & Flash",
+    "description": "Building the firmware and web UI, and provisioning a device — including the difference between routine reflashing and full provisioning."
+  }
+}

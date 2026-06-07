@@ -1,0 +1,11 @@
+{
+  "label": "Architecture",
+  "position": 2,
+  "collapsible": true,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "title": "Architecture",
+    "description": "System overview, boot sequence, and the internal-flash storage layout that makes the ESP32-C3-only design work."
+  }
+}

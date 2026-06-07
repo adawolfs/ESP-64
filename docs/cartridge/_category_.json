@@ -1,0 +1,11 @@
+{
+  "label": "Cartridge",
+  "position": 4,
+  "collapsible": true,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "title": "Cartridge",
+    "description": "The emulated Game Boy cartridge: ROM mapping, MBC banking, and the save system that persists battery RAM safely to internal flash."
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "label": "Joy-Bus",
+  "position": 3,
+  "collapsible": true,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "title": "Joy-Bus",
+    "description": "The single-wire N64 Joy-Bus: transport, controller protocol, the Transfer Pak accessory, and the hardware notes that make the timing work."
+  }
+}
