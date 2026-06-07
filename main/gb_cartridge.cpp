@@ -18,6 +18,10 @@ GbCartridgeStatus status = {};
 uint8_t save_stub[kSaveRamSize] = {};
 bool save_dirty = false;
 uint32_t save_write_seq = 0;  // bumped on each actual save byte change
+uint32_t save_changed_bytes = 0;
+uint32_t last_save_offset = 0xFFFFFFFFu;
+uint16_t last_save_gb_address = 0;
+uint8_t last_save_value = 0;
 
 uint16_t rom_banks_from_code(uint8_t code) {
   switch (code) {
@@ -78,9 +82,21 @@ void gb_cartridge_init(void) {
     status.save_loaded = false;
     status.save_stubbed = true;
   }
+  gb_cartridge_save_tracking_reset();
 }
 
 const GbCartridgeStatus &gb_cartridge_status(void) { return status; }
+
+GbCartridgeSaveDebug gb_cartridge_save_debug(void) {
+  GbCartridgeSaveDebug debug = {};
+  debug.dirty = save_dirty;
+  debug.write_seq = save_write_seq;
+  debug.changed_bytes = save_changed_bytes;
+  debug.last_offset = last_save_offset;
+  debug.last_gb_address = last_save_gb_address;
+  debug.last_value = last_save_value;
+  return debug;
+}
 
 uint8_t IRAM_ATTR gb_cartridge_read_rom(size_t offset) {
   if (!status.rom_loaded || offset >= static_cast<size_t>(gb_rom_size)) {
@@ -136,6 +152,10 @@ void IRAM_ATTR gb_cartridge_write_mapped_ram(const Mbc1Mapper *mapper,
     save_stub[offset] = value;
     save_dirty = true;  // persisted later from the runtime loop, not the ISR
     save_write_seq++;
+    save_changed_bytes++;
+    last_save_offset = static_cast<uint32_t>(offset);
+    last_save_gb_address = gb_address;
+    last_save_value = value;
   }
 }
 
@@ -154,8 +174,17 @@ bool gb_cartridge_load_save(const uint8_t *data, size_t len) {
   memcpy(save_stub, data, sizeof(save_stub));
   status.save_loaded = true;
   status.save_stubbed = false;
-  save_dirty = false;
+  gb_cartridge_save_tracking_reset();
   return true;
+}
+
+void gb_cartridge_save_tracking_reset(void) {
+  save_dirty = false;
+  save_write_seq = 0;
+  save_changed_bytes = 0;
+  last_save_offset = 0xFFFFFFFFu;
+  last_save_gb_address = 0;
+  last_save_value = 0;
 }
 
 bool gb_cartridge_header_self_test(void) {

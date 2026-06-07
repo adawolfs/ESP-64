@@ -2,7 +2,42 @@
 #define SAVE_STORE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+
+enum SaveStoreLoadResult : uint8_t {
+  SAVE_STORE_LOAD_NOT_ATTEMPTED = 0,
+  SAVE_STORE_LOAD_MISSING,
+  SAVE_STORE_LOAD_PERSISTED,
+  SAVE_STORE_LOAD_INVALID_SIZE,
+  SAVE_STORE_LOAD_NO_MEMORY,
+  SAVE_STORE_LOAD_READ_FAILED,
+};
+
+enum SaveStoreFlushResult : uint8_t {
+  SAVE_STORE_FLUSH_NONE = 0,
+  SAVE_STORE_FLUSH_OK,
+  SAVE_STORE_FLUSH_OPEN_FAILED,
+  SAVE_STORE_FLUSH_SHORT_WRITE,
+  SAVE_STORE_FLUSH_CLOSE_FAILED,
+  SAVE_STORE_FLUSH_RENAME_FAILED,
+};
+
+struct SaveStoreStatus {
+  bool persisted;
+  bool loaded_persisted;
+  bool pending;
+  bool last_flush_ok;
+  SaveStoreLoadResult load_result;
+  SaveStoreFlushResult flush_result;
+  uint32_t observed_write_seq;
+  uint32_t last_persisted_seq;
+  uint32_t flush_count;
+  uint32_t failed_flush_count;
+  uint32_t last_change_ms;
+  uint32_t last_flush_ms;
+  size_t last_load_size;
+};
 
 // Loads a persisted save from SPIFFS into the cartridge, taking precedence over
 // the embedded default. Returns true if a valid persisted save was applied.
@@ -11,12 +46,15 @@ bool save_store_load(void);
 
 // Persists the cartridge save to SPIFFS once writes have gone quiet. Call from
 // the runtime loop with a millisecond timestamp; never from an ISR.
-void save_store_service(uint32_t now_ms);
+void save_store_service(uint32_t now_ms, bool allow_flash_write = true);
 
 // Deletes the persisted save so the bundled default is restored on next boot.
 bool save_store_reset(void);
 
 // True if a persisted save currently exists on storage.
 bool save_store_persisted(void);
+const SaveStoreStatus &save_store_status(void);
+const char *save_store_load_result_name(SaveStoreLoadResult result);
+const char *save_store_flush_result_name(SaveStoreFlushResult result);
 
 #endif  // SAVE_STORE_H

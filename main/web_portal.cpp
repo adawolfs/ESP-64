@@ -321,6 +321,8 @@ void append_escaped(char *dst, size_t cap, size_t &pos, const char *src) {
   if (pos < cap) dst[pos] = '\0';
 }
 
+constexpr size_t STATE_JSON_CAP = 3072;
+
 size_t build_state_json(char *out, size_t out_cap) {
   char ssid_esc[64] = {};
   char title_esc[32] = {};
@@ -334,6 +336,8 @@ size_t build_state_json(char *out, size_t out_cap) {
   const N64ControllerState controller = n64_controller_get_state();
   const TransferPakStatus &pak = transfer_pak_status();
   const GbCartridgeStatus &cart = gb_cartridge_status();
+  const GbCartridgeSaveDebug save = gb_cartridge_save_debug();
+  const SaveStoreStatus &store = save_store_status();
   const N64JoybusDebug &joybus = n64_joybus_debug();
   const N64AccessoryDebug &accessory = n64_accessory_debug();
   const PokemonStadiumCompatStatus compat = pokemon_stadium_compat_status();
@@ -349,7 +353,15 @@ size_t build_state_json(char *out, size_t out_cap) {
       "\"cartridge\":{\"romLoaded\":%s,\"saveLoaded\":%s,\"saveStubbed\":%s,"
       "\"saveDirty\":%s,\"savePersisted\":%s,"
       "\"boundsFault\":%s,\"title\":\"%s\",\"type\":%u,\"romBanks\":%u,"
-      "\"ramBanks\":%u,\"headerChecksum\":%u},"
+      "\"ramBanks\":%u,\"headerChecksum\":%u,"
+      "\"saveWriteSeq\":%lu,\"saveChangedBytes\":%lu,"
+      "\"saveLastOffset\":%lu,\"saveLastGbAddress\":%u,"
+      "\"saveLastValue\":%u,\"savePending\":%s,"
+      "\"saveLoadedPersisted\":%s,\"saveLoadResult\":\"%s\","
+      "\"saveFlushResult\":\"%s\",\"saveLastFlushOk\":%s,"
+      "\"saveFlushCount\":%lu,\"saveFailedFlushCount\":%lu,"
+      "\"saveLastPersistedSeq\":%lu,\"saveLastChangeMs\":%lu,"
+      "\"saveLastFlushMs\":%lu,\"saveLastLoadSize\":%u},"
       "\"compat\":{\"accessoryPresent\":%s,\"romHeaderOk\":%s,"
       "\"saveReadOnlyOrStubbed\":%s},"
       "\"debug\":{\"joybusStatus\":%lu,\"joybusPoll\":%lu,"
@@ -371,6 +383,19 @@ size_t build_state_json(char *out, size_t out_cap) {
       save_store_persisted() ? "true" : "false",
       cart.bounds_fault ? "true" : "false", title_esc, cart.cartridge_type,
       cart.rom_bank_count, cart.ram_bank_count, cart.header_checksum,
+      (unsigned long)save.write_seq, (unsigned long)save.changed_bytes,
+      (unsigned long)save.last_offset, save.last_gb_address,
+      save.last_value, store.pending ? "true" : "false",
+      store.loaded_persisted ? "true" : "false",
+      save_store_load_result_name(store.load_result),
+      save_store_flush_result_name(store.flush_result),
+      store.last_flush_ok ? "true" : "false",
+      (unsigned long)store.flush_count,
+      (unsigned long)store.failed_flush_count,
+      (unsigned long)store.last_persisted_seq,
+      (unsigned long)store.last_change_ms,
+      (unsigned long)store.last_flush_ms,
+      (unsigned)store.last_load_size,
       compat.accessory_present ? "true" : "false",
       compat.rom_header_ok ? "true" : "false",
       compat.save_read_only_or_stubbed ? "true" : "false",
@@ -486,19 +511,31 @@ void publish_state_throttled(uint32_t now_ms, bool force) {
     return;
   }
   last_state_publish_ms = now_ms;
-  char buf[1536];
-  size_t n = build_state_json(buf, sizeof(buf));
-  if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+  // Built on the heap, not the stack: the JSON is ~3 KB and this runs in the
+  // httpd task on top of handle_ws's 1 KB frame buffer, which overflows the
+  // httpd task stack. malloc keeps it reentrant (also called from
+  // web_portal_loop's task), unlike a shared static buffer.
+  char *buf = static_cast<char *>(malloc(STATE_JSON_CAP));
+  if (!buf) return;
+  size_t n = build_state_json(buf, STATE_JSON_CAP);
+  if (n >= STATE_JSON_CAP) n = STATE_JSON_CAP - 1;
   broadcast_text(buf, n);
+  free(buf);
 }
 
 esp_err_t handle_api_state(httpd_req_t *req) {
-  char buf[1536];
-  size_t n = build_state_json(buf, sizeof(buf));
-  if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+  char *buf = static_cast<char *>(malloc(STATE_JSON_CAP));
+  if (!buf) {
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, nullptr);
+    return ESP_FAIL;
+  }
+  size_t n = build_state_json(buf, STATE_JSON_CAP);
+  if (n >= STATE_JSON_CAP) n = STATE_JSON_CAP - 1;
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-  return httpd_resp_send(req, buf, n);
+  esp_err_t err = httpd_resp_send(req, buf, n);
+  free(buf);
+  return err;
 }
 
 esp_err_t handle_api_save(httpd_req_t *req) {
@@ -725,7 +762,7 @@ bool start_http_server() {
   cfg.lru_purge_enable = true;
   cfg.max_uri_handlers = 12;
   cfg.max_open_sockets = MAX_HTTP_CLIENTS;
-  cfg.stack_size = 6144;
+  cfg.stack_size = 8192;
   cfg.send_wait_timeout = 1;
   cfg.recv_wait_timeout = 1;
   cfg.keep_alive_enable = true;

@@ -21,7 +21,7 @@ constexpr uint32_t JOYBUS_QUIET_BEFORE_DELAY_MS = 250;
 constexpr uint32_t IDLE_DELAY_INTERVAL_MS = 25;
 constexpr uint32_t JOYBUS_DEBUG_LOG_INTERVAL_MS = 1000;
 constexpr uint32_t RMT_ACCESSORY_WEB_QUIET_MS = 500;
-constexpr uint32_t RMT_ACCESSORY_SAVE_QUIET_MS = 2500;
+constexpr uint32_t RMT_ACCESSORY_SAVE_QUIET_MS = 750;
 uint32_t last_web_service_ms = 0;
 uint32_t last_joybus_activity_ms = 0;
 uint32_t last_idle_delay_ms = 0;
@@ -102,9 +102,11 @@ bool n64_runtime_init(void) {
 
   web_portal_mount_storage();
   if (save_store_load()) {
-    ESP_LOGI(TAG, "using persisted cartridge save");
+    ESP_LOGI(TAG, "using persisted cartridge save (%s)",
+             save_store_load_result_name(save_store_status().load_result));
   } else {
-    ESP_LOGI(TAG, "using embedded cartridge save");
+    ESP_LOGI(TAG, "using embedded cartridge save (%s)",
+             save_store_load_result_name(save_store_status().load_result));
   }
 
   if (USE_RMT_JOYBUS) {
@@ -158,7 +160,7 @@ void n64_runtime_loop(void) {
         now_ms - last_rmt_accessory_activity_ms >= RMT_ACCESSORY_SAVE_QUIET_MS;
 
     if (accessory_web_quiet) service_web(now_ms);
-    if (accessory_save_quiet) save_store_service(now_ms);
+    save_store_service(now_ms, accessory_save_quiet);
 
     // RMT callbacks own the Joy-Bus response timing. The main task must still
     // block briefly so the idle task can feed the watchdog during GB Tower's
