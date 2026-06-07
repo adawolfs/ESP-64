@@ -46,10 +46,6 @@ size_t gb_cartridge_save_size(void);
 bool gb_cartridge_save_dirty(void);
 uint32_t gb_cartridge_save_write_seq(void);
 void gb_cartridge_mark_save_persisted(void);
-// Marks a flash flush in progress. While active, ROM reads (ROM lives in flash,
-// unreadable with the cache disabled during a flush) return 0xFF instead of
-// faulting. Call true immediately before flash writes and false right after.
-void gb_cartridge_set_flush_active(bool active);
 // Replace the save RAM from a persisted copy (size must match the RAM size).
 bool gb_cartridge_load_save(const uint8_t *data, size_t len);
 void gb_cartridge_save_tracking_reset(void);

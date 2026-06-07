@@ -1,17 +1,17 @@
 set(N64_SRCS
     "main.cpp"
     "n64_runtime.cpp"
-    "n64_joybus.cpp"
-    "n64_controller.cpp"
-    "n64_accessory.cpp"
-    "transfer_pak.cpp"
-    "gb_cartridge.cpp"
-    "mbc1_mapper.cpp"
-    "save_store.cpp"
-    "power_monitor.cpp"
-    "joybus_rmt.cpp"
-    "pokemon_stadium_compat.cpp"
-    "web_portal.cpp"
+    "joybus/joybus_rmt.cpp"
+    "joybus/n64_joybus.cpp"
+    "joybus/n64_controller.cpp"
+    "joybus/n64_accessory.cpp"
+    "joybus/transfer_pak.cpp"
+    "cartridge/gb_cartridge.cpp"
+    "cartridge/mbc1_mapper.cpp"
+    "cartridge/save_store.cpp"
+    "cartridge/power_monitor.cpp"
+    "cartridge/pokemon_stadium_compat.cpp"
+    "web/web_portal.cpp"
     "web_assets.S"
 )
 
@@ -19,7 +19,7 @@ set(WEB_UI_DIST_DIR "${CMAKE_SOURCE_DIR}/data")
 
 idf_component_register(
     SRCS ${N64_SRCS}
-    INCLUDE_DIRS "." "core"
+    INCLUDE_DIRS "." "core" "joybus" "cartridge" "web"
     REQUIRES driver esp_wifi esp_event esp_netif esp_http_server
              esp_timer spiffs nvs_flash esp_partition
 )

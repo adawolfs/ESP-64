@@ -95,17 +95,8 @@ bool close_checked(FILE *f) {
   return fclose(f) == 0;
 }
 
-// Sets the flush-active flag for the lifetime of the flash write so the RMT ISR
-// returns 0xFF for ROM reads (ROM is in flash, unreadable with the cache off)
-// instead of faulting, then clears it on every exit path.
-struct FlushGuard {
-  FlushGuard() { gb_cartridge_set_flush_active(true); }
-  ~FlushGuard() { gb_cartridge_set_flush_active(false); }
-};
-
 bool persist_now(uint32_t now_ms, SaveStoreFlushReason reason) {
   const size_t size = gb_cartridge_save_size();
-  FlushGuard flush_guard;
   remove(tmp_path());
   FILE *f = fopen(tmp_path(), "wb");
   if (!f) {
