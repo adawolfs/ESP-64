@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
-    <meta name="theme-color" content="#171a1f" />
+    <meta name="theme-color" content="#101216" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="espN64" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -13,88 +14,199 @@
     <link rel="apple-touch-icon" href="icon.svg" />
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
-  <body>
+  <body data-view="controller">
     <main class="app-shell" aria-label="ESP32-C3 N64 controller and Transfer Pak web interface">
-      <header class="app-header">
-        <div>
-          <p class="eyebrow">ESP32-C3</p>
-          <h1>espN64 Transfer Pak</h1>
-        </div>
-        <div class="connection-pill" id="connection">connecting</div>
-      </header>
-
       <noscript>
         <p class="noscript-banner">JavaScript is disabled; live status and controller input are unavailable.</p>
       </noscript>
 
-      <section class="control-surface" aria-label="N64 controller controls">
-        <div class="controller-card">
-          <div class="dpad" aria-label="Directional pad">
-            <button class="control-button dpad-button dpad-up" data-control="UP" aria-label="D-pad up"></button>
-            <button class="control-button dpad-button dpad-left" data-control="LEFT" aria-label="D-pad left"></button>
-            <span class="dpad-center" aria-hidden="true"></span>
-            <button class="control-button dpad-button dpad-right" data-control="RIGHT" aria-label="D-pad right"></button>
-            <button class="control-button dpad-button dpad-down" data-control="DOWN" aria-label="D-pad down"></button>
+      <section id="controller-view" class="controller-view" aria-label="NES controller">
+        <header class="controller-topbar">
+          <div class="brand-stack">
+            <span class="eyebrow">ESP32-C3</span>
+            <h1>espN64</h1>
           </div>
+          <div class="hud-strip" aria-label="Live status">
+            <span id="connection" class="connection-pill">connecting</span>
+            <span class="game-pill">Game <strong id="game-title-compact">—</strong></span>
+          </div>
+          <button id="menu-toggle" class="menu-toggle" type="button" aria-expanded="false" aria-controls="menu-panel">Menu</button>
+        </header>
 
-          <div class="analog-stage" aria-label="Analog stick status">
-            <div class="analog-ring" aria-hidden="true">
-              <span id="analog-dot"></span>
+        <div class="nes-stage">
+          <div class="nes-cable" aria-hidden="true"></div>
+          <div class="nes-case">
+            <div class="nes-front-cover">
+              <section class="nes-left-content" aria-label="Directional pad">
+                <div class="nes-d-pad">
+                  <div class="nes-d-pad-outer" aria-hidden="true">
+                    <div class="vertical"></div>
+                    <div class="horizontal"></div>
+                  </div>
+                  <div class="nes-d-pad-inner" aria-hidden="true">
+                    <div class="vertical"></div>
+                    <div class="horizontal"></div>
+                    <div class="dot"></div>
+                  </div>
+                  <button class="control-button nes-d-hit nes-d-hit-up" data-control="UP" aria-label="D-pad up"></button>
+                  <button class="control-button nes-d-hit nes-d-hit-left" data-control="LEFT" aria-label="D-pad left"></button>
+                  <button class="control-button nes-d-hit nes-d-hit-right" data-control="RIGHT" aria-label="D-pad right"></button>
+                  <button class="control-button nes-d-hit nes-d-hit-down" data-control="DOWN" aria-label="D-pad down"></button>
+                </div>
+              </section>
+
+              <section class="nes-middle-content" aria-label="System buttons">
+                <div class="nes-middle-ridge nes-ridge-top" aria-hidden="true"></div>
+                <div class="nes-middle-ridge" aria-hidden="true"></div>
+                <div class="nes-button-labels">
+                  <p>Select</p>
+                  <p>Start</p>
+                </div>
+                <div class="nes-start-buttons">
+                  <button class="control-button nes-start-button" data-control="Z" aria-label="Select"></button>
+                  <button class="control-button nes-start-button" data-control="START" aria-label="Start"></button>
+                </div>
+                <div class="nes-middle-ridge nes-ridge-bottom" aria-hidden="true"></div>
+              </section>
+
+              <section class="nes-right-content" aria-label="Action buttons">
+                <div class="nes-brand">Nintendo<small>R</small></div>
+                <div class="nes-ab-buttons">
+                  <div class="nes-ab-container nes-ab-b">
+                    <div class="nes-ab-well">
+                      <button class="control-button nes-press-button" data-control="B" aria-label="B"></button>
+                    </div>
+                  </div>
+                  <div class="nes-ab-container nes-ab-a">
+                    <div class="nes-ab-well">
+                      <button class="control-button nes-press-button" data-control="A" aria-label="A"></button>
+                    </div>
+                  </div>
+                </div>
+              </section>
             </div>
-            <div>
-              <span>Stick</span>
-              <strong id="stick-readout">0 / 0</strong>
-              <small>read-only until firmware axis input is added</small>
-            </div>
-          </div>
-
-          <div class="face-buttons" aria-label="Face buttons">
-            <button class="control-button face-button z-button" data-control="Z">Z</button>
-            <button class="control-button face-button" data-control="B">B</button>
-            <button class="control-button face-button primary" data-control="A">A</button>
-            <button class="control-button face-button start-button" data-control="START">Start</button>
-          </div>
-
-          <div class="shoulders" aria-label="Shoulder buttons">
-            <button class="control-button shoulder-button" data-control="L">L</button>
-            <button class="control-button shoulder-button" data-control="R">R</button>
-          </div>
-
-          <div class="c-buttons" aria-label="C buttons">
-            <button class="control-button c-button c-up" data-control="C_UP" aria-label="C up">C</button>
-            <button class="control-button c-button c-left" data-control="C_LEFT" aria-label="C left">C</button>
-            <span class="c-center" aria-hidden="true">C</span>
-            <button class="control-button c-button c-right" data-control="C_RIGHT" aria-label="C right">C</button>
-            <button class="control-button c-button c-down" data-control="C_DOWN" aria-label="C down">C</button>
           </div>
         </div>
       </section>
 
-      <section class="status-grid" aria-label="Runtime status">
-        <article class="status-card">
-          <h2>Network</h2>
-          <dl id="network-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
-        </article>
-        <article class="status-card">
-          <h2>Controller</h2>
-          <dl id="controller-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
-        </article>
-        <article class="status-card">
-          <h2>Transfer Pak</h2>
-          <dl id="transfer-pak-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
-        </article>
-        <article class="status-card">
-          <h2>Cartridge</h2>
-          <dl id="cartridge-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
-        </article>
-        <article class="status-card">
-          <h2>Stadium</h2>
-          <dl id="compat-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
-        </article>
-        <article class="status-card debug-card">
-          <h2>Debug</h2>
-          <dl id="debug-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
-        </article>
+      <aside id="menu-panel" class="menu-panel" aria-hidden="true">
+        <div class="menu-card">
+          <header class="menu-header">
+            <div>
+              <p class="eyebrow">Menu</p>
+              <h2>espN64</h2>
+            </div>
+            <button id="menu-close" class="icon-button" type="button" aria-label="Close menu">×</button>
+          </header>
+
+          <section class="menu-section">
+            <h3>Current</h3>
+            <p class="game-current">Game <strong id="game-title">—</strong></p>
+            <p id="game-msg" class="game-msg" aria-live="polite"></p>
+          </section>
+
+          <section class="menu-section">
+            <h3>Game &amp; Save</h3>
+            <div class="game-actions">
+              <a id="save-download" class="game-btn" href="api/save" download="save.srm">Download save</a>
+              <label class="game-btn">Upload save
+                <input id="save-upload" type="file" accept=".srm,.sav" hidden />
+              </label>
+              <label class="game-btn game-btn-warn">Replace ROM
+                <input id="rom-upload" type="file" accept=".gb,.gbc" hidden />
+              </label>
+            </div>
+          </section>
+
+          <section class="menu-section">
+            <h3>Views</h3>
+            <div class="game-actions">
+              <button id="install-app" class="game-btn" type="button" hidden>Install app</button>
+              <button id="advanced-open" class="game-btn" type="button">Advanced status</button>
+              <button id="controller-return" class="game-btn" type="button">Controller</button>
+            </div>
+          </section>
+        </div>
+      </aside>
+      <button id="menu-backdrop" class="menu-backdrop" type="button" aria-label="Close menu"></button>
+
+      <section id="advanced-view" class="advanced-view" aria-label="Advanced controller and runtime status" hidden>
+        <header class="advanced-header">
+          <div>
+            <p class="eyebrow">Advanced</p>
+            <h2>N64 Controller &amp; Transfer Pak</h2>
+          </div>
+          <button id="advanced-close" class="game-btn" type="button">Controller</button>
+        </header>
+
+        <section class="control-surface" aria-label="N64 controller controls">
+          <div class="controller-card">
+            <div class="dpad" aria-label="Directional pad">
+              <button class="control-button dpad-button dpad-up" data-control="UP" aria-label="D-pad up"></button>
+              <button class="control-button dpad-button dpad-left" data-control="LEFT" aria-label="D-pad left"></button>
+              <span class="dpad-center" aria-hidden="true"></span>
+              <button class="control-button dpad-button dpad-right" data-control="RIGHT" aria-label="D-pad right"></button>
+              <button class="control-button dpad-button dpad-down" data-control="DOWN" aria-label="D-pad down"></button>
+            </div>
+
+            <div class="analog-stage" aria-label="Analog stick status">
+              <div class="analog-ring" aria-hidden="true">
+                <span id="analog-dot"></span>
+              </div>
+              <div>
+                <span>Stick</span>
+                <strong id="stick-readout">0 / 0</strong>
+              </div>
+            </div>
+
+            <div class="face-buttons" aria-label="Face buttons">
+              <button class="control-button face-button z-button" data-control="Z">Z</button>
+              <button class="control-button face-button" data-control="B">B</button>
+              <button class="control-button face-button primary" data-control="A">A</button>
+              <button class="control-button face-button start-button" data-control="START">Start</button>
+            </div>
+
+            <div class="shoulders" aria-label="Shoulder buttons">
+              <button class="control-button shoulder-button" data-control="L">L</button>
+              <button class="control-button shoulder-button" data-control="R">R</button>
+            </div>
+
+            <div class="c-buttons" aria-label="C buttons">
+              <button class="control-button c-button c-up" data-control="C_UP" aria-label="C up">C</button>
+              <button class="control-button c-button c-left" data-control="C_LEFT" aria-label="C left">C</button>
+              <span class="c-center" aria-hidden="true">C</span>
+              <button class="control-button c-button c-right" data-control="C_RIGHT" aria-label="C right">C</button>
+              <button class="control-button c-button c-down" data-control="C_DOWN" aria-label="C down">C</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="status-grid" aria-label="Runtime status">
+          <article class="status-card">
+            <h2>Network</h2>
+            <dl id="network-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
+          </article>
+          <article class="status-card">
+            <h2>Controller</h2>
+            <dl id="controller-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
+          </article>
+          <article class="status-card">
+            <h2>Transfer Pak</h2>
+            <dl id="transfer-pak-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
+          </article>
+          <article class="status-card">
+            <h2>Cartridge</h2>
+            <dl id="cartridge-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
+          </article>
+          <article class="status-card">
+            <h2>Stadium</h2>
+            <dl id="compat-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
+          </article>
+          <article class="status-card debug-card">
+            <h2>Debug</h2>
+            <dl id="debug-status"><dt>Status</dt><dd>waiting for firmware state</dd></dl>
+          </article>
+        </section>
       </section>
 
       <p id="status" class="sr-only" aria-live="polite">connecting</p>

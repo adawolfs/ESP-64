@@ -22,6 +22,9 @@ SaveStoreStatus status = {};
 bool seq_initialized = false;
 uint32_t last_seq = 0;
 bool dirty_logged = false;
+// Set by web upload handlers so the runtime-loop save service does not touch the
+// save / save.srm while a ROM or save upload is rewriting it.
+volatile bool store_busy = false;
 
 // --- Emergency power-loss save slot (raw flash partition) ---------------------
 // Layout: [sector 0] header, [sectors 1..] save body. Program-only on power loss
@@ -229,6 +232,7 @@ bool save_store_load(void) {
 
 void save_store_service(uint32_t now_ms, bool allow_flash_write,
                         SaveStoreFlushReason reason) {
+  if (store_busy) return;  // a web upload owns the save right now
   const uint32_t seq = gb_cartridge_save_write_seq();
   if (!seq_initialized || seq != last_seq) {
     seq_initialized = true;
@@ -254,6 +258,16 @@ void save_store_service(uint32_t now_ms, bool allow_flash_write,
   if (!allow_flash_write) return;
   if (now_ms - status.last_change_ms < PERSIST_DEBOUNCE_MS) return;
   persist_now(now_ms, reason);
+}
+
+void save_store_set_busy(bool busy) { store_busy = busy; }
+
+bool save_store_force_persist(void) {
+  const bool ok = persist_now(0, SAVE_STORE_FLUSH_REASON_BUS_QUIET);
+  seq_initialized = true;
+  last_seq = gb_cartridge_save_write_seq();
+  status.observed_write_seq = last_seq;
+  return ok;
 }
 
 bool save_store_flush_on_power_loss(void) {

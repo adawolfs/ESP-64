@@ -37,4 +37,10 @@ bool joybus_rmt_init(int gpio_num);
 bool joybus_rmt_loop(uint32_t now_ms);
 const JoybusRmtStats &joybus_rmt_stats(void);
 
+// Quiesce/restart RX around flash writes (ROM/save upload), so the response ISR
+// is not needed while the cache is disabled. Returns false on the bitbang
+// transport (no RMT channel).
+bool joybus_rmt_pause(void);
+bool joybus_rmt_resume(void);
+
 #endif  // JOYBUS_RMT_H

@@ -42,7 +42,7 @@ cd /ruta/a/esp-idf
 ```
 esp32-socket-react/
 ├── CMakeLists.txt              # Top-level CMake
-├── partitions.csv              # 2.5 MB app + 1.5 MB SPIFFS
+├── partitions.csv              # 1.5 MB app + 1 MB ROM + SPIFFS + emergency save
 ├── sdkconfig.defaults          # Config base (target c3, WS, SPIFFS, …)
 ├── main/
 │   ├── CMakeLists.txt
@@ -55,17 +55,9 @@ esp32-socket-react/
 │   ├── cst816d.*               # Driver i2c_master del táctil
 │   ├── touch_input.*           # Mapeo táctil + web → botones GB
 │   ├── web_portal.*            # SoftAP + HTTP + WebSocket
-│   └── core/                   # Game Boy core portable (sin tocar)
-│       ├── cpu.cpp/h           # Z80-like instruction decoder
-│       ├── mem.cpp/h           # Mapa de memoria + persistencia SRAM
-│       ├── rom.cpp/h           # Header parsing + detección MBC
-│       ├── mbc.cpp/h           # MBC1 / MBC3 / MBC5
-│       ├── lcd.cpp/h           # PPU → framebuffer indexado 160×144
-│       ├── timer.cpp/h
-│       ├── interrupt.cpp/h
-│       ├── apu.cpp/h           # APU software (deshabilitada por defecto)
-        ├── sdl.cpp/h           # Fachada I/O del core
-        └── gbrom.h             # ROM embebida (modifícala con 
+│   ├── cartridge/              # ROM mmap, mappers, save persistence
+│   ├── joybus/                 # N64 controller + Transfer Pak transport
+│   └── web/                    # SoftAP + HTTP + WebSocket
 ```
 
 ---
@@ -101,9 +93,9 @@ idf.py reconfigure           # tras cambios en sdkconfig / componentes
 
 ## Web UI y SPIFFS
 
-El portal web sirve los assets desde la partición SPIFFS `storage` (montada en
-`/spiffs`). El proyecto **no genera la imagen SPIFFS automáticamente** — hay
-que producirla con `mkspiffs` y flashearla aparte.
+El portal web sirve los assets embebidos en el firmware y también puede montar
+la partición SPIFFS `storage` en `/spiffs` para saves y assets actualizados. Con
+PlatformIO, `pio run` genera la imagen SPIFFS desde `data/` cuando existe.
 
 ### 1. Compilar la UI Vite
 
@@ -118,11 +110,12 @@ npm run build              # genera dist/
 
 ### 2. Generar la imagen SPIFFS
 
-ESP-IDF incluye `spiffsgen.py`. Tamaño = 1472 KB (ver `partitions.csv`).
+ESP-IDF incluye `spiffsgen.py`. Tamaño = `0x167000` bytes (ver
+`partitions.csv`).
 
 ```bash
 python $IDF_PATH/components/spiffs/spiffsgen.py \
-  1507328 \
+  1478656 \
   data build/storage.bin
 ```
 
@@ -146,23 +139,58 @@ pruebas con `curl` o con el cliente WebSocket que prefieras.
 
 ## Cargar otro juego
 
-La ROM se compila *embebida* en el firmware. Para cambiarla:
+La ROM activa ya no se compila en el firmware. Vive en la partición `rom`
+(`0x190000`, 1 MB) y se puede reemplazar desde el portal con **Replace ROM** o
+por HTTP:
 
-1. Convertí tu `.gb` a un array C:
-   ```bash
-   xxd -i tu_juego.gb > main/core/gbrom.h
-   ```
-2. Editá la cabecera de `gbrom.h` para que el array se llame `gb_rom` y sea
-   `const unsigned char gb_rom[] = { ... };`. Mirá el archivo actual como
-   referencia de formato.
-3. `idf.py build flash`.
+```bash
+curl --data-binary @tu_juego.gb http://192.168.4.1/api/rom
+```
 
-> ⚠️ La partición de app es de 2.5 MB. Una ROM de 1 MB ocupa ~1 MB de flash;
-> ROMs > 1.5 MB no caben sin reorganizar `partitions.csv`.
+Si existe `roms/active.gb`, PlatformIO lo flashea automáticamente en la
+partición `rom` durante `pio run --target upload`. Si no existe, el equipo
+arranca con la partición en blanco y el portal muestra que no hay ROM válida.
 
-Las cartridge SRAM (saves) se persisten automáticamente en
-`/spiffs/sram.bin` con metadata del header (título + checksum), de modo que
-cambiar de ROM invalida el save anterior automáticamente.
+Cambiar la ROM borra el save activo para no presentar una SRAM de otro juego.
+Después podés subir el `.srm` correspondiente desde **Upload save** o por HTTP:
+
+```bash
+curl --data-binary @save.srm http://192.168.4.1/api/save
+curl -o save.srm http://192.168.4.1/api/save
+```
+
+### Save por defecto (bundled)
+
+El save por defecto vive en `data/save.srm` y se entrega **dentro de la imagen
+SPIFFS `storage`** (la misma que lleva la web UI). En el arranque,
+`save_store_load()` lo carga en la RAM del cartucho cuando todavía no hay un save
+persistido del usuario; un save persistido siempre tiene prioridad sobre el default.
+
+`data/save.srm` se regenera automáticamente desde el `.srm` fuente
+(`scripts/copy_default_save.mjs`, validado a 32 KB) antes de construir la imagen
+SPIFFS — tanto en `npm run build` como en el build de PlatformIO
+(`scripts/platformio_default_save.py`, requiere `node` en el PATH).
+
+**Importante — la imagen SPIFFS no se flashea en un `upload` normal.** Un
+`pio run --target upload` graba el firmware y la ROM (`roms/active.gb`), por lo que
+el juego aparece, pero **no** toca la partición `storage`. Para entregar el save por
+defecto en un equipo nuevo hay que flashear también la imagen SPIFFS:
+
+```bash
+# Provisión completa de un equipo nuevo (app + ROM + SPIFFS con save default):
+cd webui && npm run upload:all      # build → pio upload → pio uploadfs
+
+# Sólo la imagen SPIFFS (save default + web UI):
+pio run --target uploadfs
+```
+
+Reflashear SPIFFS **sobrescribe el save persistido del usuario** con el default, así
+que reservalo para provisión inicial. Para reflasheos de día a día usá `upload` /
+`app-flash`, que dejan intacto el save del jugador en `storage`.
+
+> Acoplamiento conocido (follow-up): `copy_default_save.mjs` apunta a un `.srm`
+> fijo (Pokémon Yellow). Si cambiás la ROM activa, el save por defecto puede no
+> corresponder al juego; conviene parear el default con `roms/active.gb`.
 
 ---
 
@@ -183,6 +211,9 @@ cambiar de ROM invalida el save anterior automáticamente.
 | GET  | `/api/state`      | JSON con red, heap, stream y entrada |
 | GET  | `/api/input_state`| Alias del anterior |
 | POST | `/api/input`      | Form-encoded `control=a|b|select|start|up|down|left|right`, `pressed=1\|0` |
+| GET  | `/api/save`       | Descarga el save activo (`save.srm`) |
+| POST | `/api/save`       | Sube un save de 32 KB y lo persiste |
+| POST | `/api/rom`        | Reemplaza la ROM activa en la partición `rom` |
 | GET  | `/ws`             | Upgrade a WebSocket (HTTP+WS comparten puerto 80) |
 
 ### Mensajes WebSocket
@@ -346,4 +377,9 @@ python -m esptool --chip esp32c3 -p PORT \
 
 # Borrar todo el flash (incluye saves):
 idf.py -p PORT erase-flash
+
+# Cambio de tabla de particiones: borrar todo y reflashear una vez.
+# Necesario al pasar a la partición `rom` dedicada.
+idf.py -p PORT erase-flash
+idf.py -p PORT flash
 ```

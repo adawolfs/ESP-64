@@ -64,6 +64,14 @@ void save_store_service(
     uint32_t now_ms, bool allow_flash_write = true,
     SaveStoreFlushReason reason = SAVE_STORE_FLUSH_REASON_BUS_QUIET);
 
+// Persists the current cartridge save to SPIFFS immediately (used after a web
+// save upload, when the console is paused). Returns true on success.
+bool save_store_force_persist(void);
+
+// While busy, the runtime-loop save service is suppressed so a web upload can
+// rewrite the save / ROM exclusively. Set true before, false after.
+void save_store_set_busy(bool busy);
+
 // Commits the dirty save to the pre-erased emergency flash slot with a bounded,
 // program-only write (no erase, no filesystem). Safe to call from a high-priority
 // task during the power-loss ride-down once the console has stopped driving the

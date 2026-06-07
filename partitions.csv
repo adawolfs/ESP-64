@@ -1,5 +1,12 @@
 # Name,   Type, SubType, Offset,   Size,     Flags
 nvs,      data, nvs,     0x9000,   0x6000,
 phy_init, data, phy,     0xF000,   0x1000,
-factory,  app,  factory, 0x10000,  0x280000,
-storage,  data, spiffs,  0x290000, 0x170000,
+factory,  app,  factory, 0x10000,  0x180000,
+# Active Game Boy ROM (1 MB, covers all Gen-1 carts). Memory-mapped for the
+# Transfer Pak read path; replaced via the web ROM-upload endpoint.
+rom,      data, 0x41,    0x190000, 0x100000,
+storage,  data, spiffs,  0x290000, 0x167000,
+# Emergency save slot: written program-only during power-loss ride-down, then
+# merged into storage/save.srm on next boot. Kept pre-erased ("armed"). 0x9000 =
+# 36 KB = 9 sectors (8 for the 32 KB save body + 1 for the header).
+emgsave,  data, 0x40,    0x3F7000, 0x9000,

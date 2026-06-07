@@ -1,4 +1,4 @@
-const CACHE_NAME = 'esp32-n64-transfer-pak-webui-v2';
+const CACHE_NAME = 'esp32-n64-transfer-pak-webui-v3';
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', (event) => {

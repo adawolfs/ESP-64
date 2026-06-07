@@ -18,6 +18,7 @@
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "gb_cartridge.h"
+#include "joybus_rmt.h"
 #include "lwip/inet.h"
 #include "lwip/sockets.h"
 #include "n64_accessory.h"
@@ -558,6 +559,138 @@ esp_err_t handle_api_save_reset(httpd_req_t *req) {
   return ESP_OK;
 }
 
+// POST /api/save — upload (load) a 32 KB savegame and persist it.
+esp_err_t handle_api_save_post(httpd_req_t *req) {
+  const size_t expected = gb_cartridge_save_size();
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  if (req->content_len != expected) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    httpd_resp_sendstr(req, "{\"loaded\":false,\"error\":\"bad size\"}");
+    return ESP_OK;
+  }
+  uint8_t *buf = static_cast<uint8_t *>(malloc(expected));
+  if (!buf) {
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, nullptr);
+    return ESP_FAIL;
+  }
+  size_t got = 0;
+  while (got < expected) {
+    int r = httpd_req_recv(req, reinterpret_cast<char *>(buf) + got,
+                           expected - got);
+    if (r <= 0) {
+      if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+      break;
+    }
+    got += r;
+  }
+  bool ok = got == expected;
+  if (ok) {
+    save_store_set_busy(true);
+    joybus_rmt_pause();
+    ok = gb_cartridge_load_save(buf, expected) && save_store_force_persist();
+    joybus_rmt_resume();
+    save_store_set_busy(false);
+  }
+  free(buf);
+  httpd_resp_sendstr(req, ok ? "{\"loaded\":true}" : "{\"loaded\":false}");
+  return ESP_OK;
+}
+
+// POST /api/rom — replace the active game. Streams the ROM straight to the `rom`
+// flash partition in aligned 4 KB sectors (never buffers the whole 1 MB), pausing
+// the Joy-Bus so the flash writes don't contend with the response path.
+esp_err_t handle_api_rom_post(httpd_req_t *req) {
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  const int total = req->content_len;
+  if (total <= 0x150 || total > 0x100000) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    httpd_resp_sendstr(req, "{\"loaded\":false,\"error\":\"bad size\"}");
+    return ESP_OK;
+  }
+
+  constexpr size_t kSector = 4096;
+  uint8_t *sec = static_cast<uint8_t *>(malloc(kSector));
+  uint8_t *first_sec = static_cast<uint8_t *>(malloc(kSector));
+  if (!sec || !first_sec) {
+    free(sec);
+    free(first_sec);
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, nullptr);
+    return ESP_FAIL;
+  }
+
+  save_store_set_busy(true);
+  joybus_rmt_pause();
+  bool ok = gb_cartridge_rom_write_begin(static_cast<size_t>(total));
+  size_t flash_off = 0;
+  size_t sec_fill = 0;
+  int received = 0;
+  bool first_sec_ready = false;
+  while (ok && received < total) {
+    int r = httpd_req_recv(req, reinterpret_cast<char *>(sec) + sec_fill,
+                           kSector - sec_fill);
+    if (r <= 0) {
+      if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+      ok = false;
+      break;
+    }
+    sec_fill += r;
+    received += r;
+    if (sec_fill == kSector) {
+      if (flash_off == 0) {
+        memcpy(first_sec, sec, kSector);
+        first_sec_ready = true;
+      } else {
+        ok = gb_cartridge_rom_write_chunk(flash_off, sec, kSector);
+      }
+      flash_off += kSector;
+      sec_fill = 0;
+    }
+  }
+  if (ok && received != total) ok = false;
+  if (ok && sec_fill > 0) {  // flush final partial sector, padded with 0xFF
+    memset(sec + sec_fill, 0xFF, kSector - sec_fill);
+    if (flash_off == 0) {
+      memcpy(first_sec, sec, kSector);
+      first_sec_ready = true;
+    } else {
+      ok = gb_cartridge_rom_write_chunk(flash_off, sec, kSector);
+    }
+  }
+  // Program the header sector last. If an upload is interrupted, the erased
+  // header remains invalid after reboot instead of exposing a partial ROM.
+  if (ok && first_sec_ready) {
+    ok = gb_cartridge_rom_write_chunk(0, first_sec, kSector);
+  }
+  free(sec);
+  free(first_sec);
+  if (ok) ok = gb_cartridge_rom_write_finish();
+  if (ok) {
+    // New game: reset the save (a previous game's save must not be presented) and
+    // re-init the Transfer Pak mapper from the new header.
+    gb_cartridge_clear_save();
+    save_store_reset();
+    save_store_arm_power_loss_slot();
+    transfer_pak_init();
+  }
+  joybus_rmt_resume();
+  save_store_set_busy(false);
+
+  char body[96];
+  int n = snprintf(body, sizeof(body),
+                   "{\"loaded\":%s,\"title\":\"%s\",\"type\":%u}",
+                   ok ? "true" : "false",
+                   ok ? gb_cartridge_status().title : "",
+                   ok ? gb_cartridge_status().cartridge_type : 0);
+  if (n < 0 || n >= (int)sizeof(body)) {
+    httpd_resp_sendstr(req, ok ? "{\"loaded\":true}" : "{\"loaded\":false}");
+  } else {
+    httpd_resp_send(req, body, n);
+  }
+  return ESP_OK;
+}
+
 esp_err_t handle_api_input(httpd_req_t *req) {
   char body[256];
   int total = 0;
@@ -810,6 +943,16 @@ bool start_http_server() {
   uri_save_reset.method = HTTP_POST;
   uri_save_reset.handler = handle_api_save_reset;
 
+  static httpd_uri_t uri_save_post = {};
+  uri_save_post.uri = "/api/save";
+  uri_save_post.method = HTTP_POST;
+  uri_save_post.handler = handle_api_save_post;
+
+  static httpd_uri_t uri_rom_post = {};
+  uri_rom_post.uri = "/api/rom";
+  uri_rom_post.method = HTTP_POST;
+  uri_rom_post.handler = handle_api_rom_post;
+
   static httpd_uri_t uri_ws = {};
   uri_ws.uri = "/ws";
   uri_ws.method = HTTP_GET;
@@ -827,6 +970,8 @@ bool start_http_server() {
   httpd_register_uri_handler(server, &uri_input_post);
   httpd_register_uri_handler(server, &uri_save);
   httpd_register_uri_handler(server, &uri_save_reset);
+  httpd_register_uri_handler(server, &uri_save_post);
+  httpd_register_uri_handler(server, &uri_rom_post);
   httpd_register_uri_handler(server, &uri_ws);
   httpd_register_uri_handler(server, &uri_static);
   httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handle_not_found);

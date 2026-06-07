@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "vite build",
+    "build": "vite build && node ../scripts/copy_default_save.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "build:fs": "npm run build && cd .. && ~/.platformio/penv/bin/pio run --target buildfs",
     "upload:fs": "npm run build && cd .. && ~/.platformio/penv/bin/pio run --target uploadfs",

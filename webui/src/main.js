@@ -10,7 +10,19 @@ const nodes = {
   compat: document.getElementById('compat-status'),
   debug: document.getElementById('debug-status'),
   stickReadout: document.getElementById('stick-readout'),
-  analogDot: document.getElementById('analog-dot')
+  analogDot: document.getElementById('analog-dot'),
+  controllerView: document.getElementById('controller-view'),
+  advancedView: document.getElementById('advanced-view'),
+  menuPanel: document.getElementById('menu-panel'),
+  menuToggle: document.getElementById('menu-toggle'),
+  menuClose: document.getElementById('menu-close'),
+  menuBackdrop: document.getElementById('menu-backdrop'),
+  advancedOpen: document.getElementById('advanced-open'),
+  advancedClose: document.getElementById('advanced-close'),
+  controllerReturn: document.getElementById('controller-return'),
+  installApp: document.getElementById('install-app'),
+  gameTitle: document.getElementById('game-title'),
+  compactGameTitle: document.getElementById('game-title-compact')
 };
 
 const WS_INPUT_BACKPRESSURE_BYTES = 8 * 1024;
@@ -57,6 +69,8 @@ let latestState = null;
 let reconnectTimer = 0;
 let reconnectAttempts = 0;
 let shuttingDown = false;
+let deferredInstallPrompt = null;
+let fullscreenAttempted = false;
 
 const heldIntervals = new Map();
 const releaseTimers = new Map();
@@ -97,6 +111,24 @@ function setHeld(control, isHeld) {
   });
 }
 
+function standaloneDisplay() {
+  return window.matchMedia('(display-mode: fullscreen)').matches ||
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true;
+}
+
+async function requestAppFullscreen() {
+  if (fullscreenAttempted || standaloneDisplay()) return;
+  fullscreenAttempted = true;
+  const root = document.documentElement;
+  if (root.requestFullscreen && !document.fullscreenElement) {
+    await root.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+  }
+  if (screen.orientation?.lock) {
+    await screen.orientation.lock('landscape').catch(() => {});
+  }
+}
+
 function socketWritable(limit = WS_INPUT_BACKPRESSURE_BYTES) {
   return socket && socket.readyState === WebSocket.OPEN && socket.bufferedAmount <= limit;
 }
@@ -109,6 +141,45 @@ function sendSocketJson(payload, limit = WS_INPUT_BACKPRESSURE_BYTES) {
   } catch {
     return false;
   }
+}
+
+function releaseAllControls() {
+  heldIntervals.forEach((timer, control) => {
+    clearInterval(timer);
+    sendInput(control, false);
+    setHeld(control, false);
+  });
+  heldIntervals.clear();
+  releaseTimers.forEach((timer, control) => {
+    clearTimeout(timer);
+    sendInput(control, false);
+    setHeld(control, false);
+  });
+  releaseTimers.clear();
+  activeKeys.clear();
+}
+
+function setMenuOpen(open) {
+  releaseAllControls();
+  document.body.dataset.menu = open ? 'open' : 'closed';
+  if (nodes.menuToggle) nodes.menuToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (nodes.menuPanel) nodes.menuPanel.setAttribute('aria-hidden', open ? 'false' : 'true');
+}
+
+function showAdvancedView() {
+  releaseAllControls();
+  setMenuOpen(false);
+  document.body.dataset.view = 'advanced';
+  if (nodes.controllerView) nodes.controllerView.hidden = true;
+  if (nodes.advancedView) nodes.advancedView.hidden = false;
+}
+
+function showControllerView() {
+  releaseAllControls();
+  setMenuOpen(false);
+  document.body.dataset.view = 'controller';
+  if (nodes.controllerView) nodes.controllerView.hidden = false;
+  if (nodes.advancedView) nodes.advancedView.hidden = true;
 }
 
 function rows(target, entries) {
@@ -180,6 +251,12 @@ function renderState(state = latestState) {
     ['Invalid accesses', valueOrDash(pak.invalidAccesses, count)]
   ]);
 
+  const titleText = cartridge.romLoaded
+      ? valueOrDash(cartridge.title)
+      : 'no ROM - upload one';
+  if (nodes.gameTitle) nodes.gameTitle.textContent = titleText;
+  if (nodes.compactGameTitle) nodes.compactGameTitle.textContent = titleText;
+
   rows(nodes.cartridge, [
     ['Title', valueOrDash(cartridge.title)],
     ['ROM loaded', boolLabel(cartridge.romLoaded)],
@@ -191,6 +268,7 @@ function renderState(state = latestState) {
     ['Save pending', boolLabel(cartridge.savePending)],
     ['Load result', valueOrDash(cartridge.saveLoadResult)],
     ['Flush result', valueOrDash(cartridge.saveFlushResult)],
+    ['Flush reason', valueOrDash(cartridge.saveFlushReason)],
     ['Last flush OK', boolLabel(cartridge.saveLastFlushOk)],
     ['Flush count', valueOrDash(cartridge.saveFlushCount, count)],
     ['Failed flushes', valueOrDash(cartridge.saveFailedFlushCount, count)],
@@ -296,6 +374,7 @@ function bindPointerHandlers(button) {
   const control = button.dataset.control;
   button.addEventListener('pointerdown', (event) => {
     event.preventDefault();
+    requestAppFullscreen();
     try {
       button.setPointerCapture(event.pointerId);
     } catch {
@@ -379,8 +458,79 @@ function onKeyUp(event) {
 }
 
 controlButtons.forEach((button) => bindPointerHandlers(button));
+
+if (nodes.menuToggle) {
+  nodes.menuToggle.addEventListener('click', () => {
+    setMenuOpen(document.body.dataset.menu !== 'open');
+  });
+}
+if (nodes.menuClose) nodes.menuClose.addEventListener('click', () => setMenuOpen(false));
+if (nodes.menuBackdrop) nodes.menuBackdrop.addEventListener('click', () => setMenuOpen(false));
+if (nodes.advancedOpen) nodes.advancedOpen.addEventListener('click', showAdvancedView);
+if (nodes.advancedClose) nodes.advancedClose.addEventListener('click', showControllerView);
+if (nodes.controllerReturn) nodes.controllerReturn.addEventListener('click', showControllerView);
+if (nodes.installApp) {
+  nodes.installApp.addEventListener('click', async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice.catch(() => {});
+    deferredInstallPrompt = null;
+    nodes.installApp.hidden = true;
+  });
+}
+
+function setGameMsg(text) {
+  const el = document.getElementById('game-msg');
+  if (el) el.textContent = text;
+}
+
+async function uploadBinary(path, file, label) {
+  setGameMsg(`Uploading ${label} (${Math.round(file.size / 1024)} KB)...`);
+  try {
+    const res = await fetch(new URL(path, window.location.href), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: file
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.loaded) {
+      setGameMsg(`${label} loaded${data.title ? `: ${data.title.trim()}` : ''}.`);
+      loadState().catch(() => {});
+    } else {
+      setGameMsg(`${label} upload failed${data.error ? ` (${data.error})` : ''}.`);
+    }
+  } catch (err) {
+    setGameMsg(`${label} upload error: ${err}`);
+  }
+}
+
+function bindUpload(inputId, path, label, confirmText) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  input.addEventListener('change', async () => {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    if (confirmText && !window.confirm(confirmText)) return;
+    await uploadBinary(path, file, label);
+  });
+}
+
+bindUpload('save-upload', 'api/save', 'Save');
+bindUpload('rom-upload', 'api/rom', 'ROM',
+  'Replace the active game? This erases the current save.');
+
 window.addEventListener('keydown', onKeyDown);
 window.addEventListener('keyup', onKeyUp);
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    if (document.body.dataset.menu === 'open') {
+      setMenuOpen(false);
+    } else if (document.body.dataset.view === 'advanced') {
+      showControllerView();
+    }
+  }
+});
 
 renderState({});
 connectSocket().catch(() => {
@@ -394,10 +544,18 @@ window.addEventListener('pagehide', () => {
   shuttingDown = true;
   window.clearTimeout(reconnectTimer);
   if (socket) socket.close();
-  heldIntervals.forEach((timer) => clearInterval(timer));
-  heldIntervals.clear();
-  releaseTimers.forEach((timer) => clearTimeout(timer));
-  releaseTimers.clear();
+  releaseAllControls();
+});
+
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  if (nodes.installApp) nodes.installApp.hidden = false;
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  if (nodes.installApp) nodes.installApp.hidden = true;
 });
 
 if ('serviceWorker' in navigator) {

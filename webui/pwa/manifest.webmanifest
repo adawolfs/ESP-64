@@ -4,10 +4,11 @@
   "description": "Installable ESP32-C3 N64 controller and Transfer Pak dashboard.",
   "start_url": "/",
   "scope": "/",
-  "display": "standalone",
-  "orientation": "any",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
   "background_color": "#101216",
-  "theme_color": "#171a1f",
+  "theme_color": "#101216",
   "icons": [
     {
       "src": "/icon.svg",

@@ -29,6 +29,9 @@ struct GbCartridgeSaveDebug {
 };
 
 void gb_cartridge_init(void);
+// Re-map and re-parse the ROM partition after it has been rewritten. Returns true
+// if a valid ROM is now active.
+bool gb_cartridge_reload_from_partition(void);
 const GbCartridgeStatus &gb_cartridge_status(void);
 GbCartridgeSaveDebug gb_cartridge_save_debug(void);
 uint8_t gb_cartridge_read_rom(size_t offset);
@@ -49,6 +52,16 @@ void gb_cartridge_mark_save_persisted(void);
 // Replace the save RAM from a persisted copy (size must match the RAM size).
 bool gb_cartridge_load_save(const uint8_t *data, size_t len);
 void gb_cartridge_save_tracking_reset(void);
+// Reset the save RAM to blank (used when the ROM is replaced). Marks dirty so the
+// blank state overwrites any persisted copy.
+void gb_cartridge_clear_save(void);
+
+// ROM partition write (web upload). Begin erases for total_len, chunk programs at
+// offset, finish re-maps + re-parses. The ROM is unmapped between begin and a
+// successful finish, so the Joy-Bus transport must be paused around these calls.
+bool gb_cartridge_rom_write_begin(size_t total_len);
+bool gb_cartridge_rom_write_chunk(size_t offset, const uint8_t *data, size_t len);
+bool gb_cartridge_rom_write_finish(void);
 
 bool gb_cartridge_header_self_test(void);
 

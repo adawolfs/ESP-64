@@ -19,7 +19,7 @@ set(WEB_UI_DIST_DIR "${CMAKE_SOURCE_DIR}/data")
 
 idf_component_register(
     SRCS ${N64_SRCS}
-    INCLUDE_DIRS "." "core" "joybus" "cartridge" "web"
+    INCLUDE_DIRS "." "joybus" "cartridge" "web"
     REQUIRES driver esp_wifi esp_event esp_netif esp_http_server
              esp_timer spiffs nvs_flash esp_partition
 )

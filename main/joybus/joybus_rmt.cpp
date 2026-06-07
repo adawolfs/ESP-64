@@ -344,6 +344,20 @@ bool joybus_rmt_init(int gpio_num) {
 
 const JoybusRmtStats &joybus_rmt_stats(void) { return stats; }
 
+bool joybus_rmt_pause(void) {
+  if (!rx_chan) return false;
+  // Quiesce RX so the console is not answered while a flash write (ROM/save
+  // upload) has the cache disabled and the response ISR cannot run.
+  return rmt_disable(rx_chan) == ESP_OK;
+}
+
+bool joybus_rmt_resume(void) {
+  if (!rx_chan) return false;
+  if (rmt_enable(rx_chan) != ESP_OK) return false;
+  return rmt_receive(rx_chan, rx_symbols, sizeof(rx_symbols), &rx_config) ==
+         ESP_OK;
+}
+
 bool joybus_rmt_loop(uint32_t now_ms) {
   refresh_response_cache();
 
