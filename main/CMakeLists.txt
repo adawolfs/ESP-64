@@ -12,6 +12,7 @@ set(N64_SRCS
     "cartridge/power_monitor.cpp"
     "cartridge/pokemon_stadium_compat.cpp"
     "web/web_portal.cpp"
+    "status_display.cpp"
     "web_assets.S"
 )
 
@@ -27,6 +28,12 @@ idf_component_register(
 if(DEFINED GB_ENABLE_AUDIO)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
         "GB_ENABLE_AUDIO=${GB_ENABLE_AUDIO}"
+    )
+endif()
+
+if(DEFINED OLED_STATUS_ENABLED)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+        "OLED_STATUS_ENABLED=${OLED_STATUS_ENABLED}"
     )
 endif()
 

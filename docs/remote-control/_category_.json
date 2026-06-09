@@ -1,0 +1,11 @@
+{
+  "label": "Remote Control (R36S)",
+  "position": 8,
+  "collapsible": true,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "Remote Control (R36S)",
+    "description": "Provision the ESP32 onto your home Wi-Fi and drive the N64 game from an R36S handheld: connect, stream input, and swap ROMs/saves from the handheld's filesystem."
+  }
+}

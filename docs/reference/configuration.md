@@ -16,7 +16,7 @@ flags.
 
 | Symbol | Default | Purpose |
 | --- | --- | --- |
-| `N64_JOYBUS_DATA_GPIO` | `4` | Joy-Bus data line (override with `-DN64_JOYBUS_DATA_GPIO=<n>`) |
+| `N64_JOYBUS_DATA_GPIO` | `7` | Joy-Bus data line (override with `-DN64_JOYBUS_DATA_GPIO=<n>`) |
 | `POWER_LOSS_SENSE_GPIO` | `-1` | Power-loss sense input; `-1` disables the monitor |
 | `POWER_LOSS_ACTIVE_LEVEL` | `0` | Logic level indicating power loss (active-low) |
 
@@ -57,7 +57,7 @@ on a fully-idle accessory bus. See [Save System](../cartridge/save-system).
 | --- | --- | --- |
 | `GB_ENABLE_AUDIO` | `1` | Compile the APU / WebSocket audio path |
 | `N64_JOYBUS_BITBANG` | unset | Use the bit-bang transport (diagnosis) |
-| `N64_JOYBUS_DATA_GPIO` | `4` | Override the Joy-Bus data pin |
+| `N64_JOYBUS_DATA_GPIO` | `7` | Override the Joy-Bus data pin |
 | `POWER_LOSS_SENSE_GPIO` | `-1` | Enable the power-loss monitor on a pin |
 
 ## Dimensions & palette

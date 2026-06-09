@@ -44,8 +44,10 @@ rejects replacement). A torn write never corrupts the live save.
 ## Loading and precedence
 
 `save_store_load()` reads `/spiffs/save.srm`, requires it to be exactly 32 KB, and loads
-it into the cartridge with precedence over the blank default. The result is reported as
-one of: `persisted`, `missing`, `invalid_size`, `no_memory`, `read_failed`. See the
+it into the cartridge when valid. If the SPIFFS save is missing or unreadable, it falls
+back to the firmware-embedded bundled default before leaving the cartridge blank. The
+result is reported as one of: `persisted`, `default`, `missing`, `invalid_size`,
+`invalid_content`, `no_memory`, `read_failed`. See the
 [boot sequence](../architecture/boot-sequence#save-load-precedence) for the full
 precedence order. The bundled default is covered in [Default Save](./default-save).
 

@@ -9,10 +9,10 @@ description: How the bundled default savegame is generated, shipped inside the S
 # Default Save Delivery
 
 The **bundled default save** is the savegame a fresh device shows before the player has
-saved anything of their own. It lives in `data/save.srm` and is shipped inside the
-SPIFFS `storage` image. At boot, [`save_store_load()`](./save-system#loading-and-precedence)
-loads it into cartridge RAM **only when no persisted user save exists** — a persisted
-save always wins.
+saved anything of their own. It lives in `data/save.srm`, is embedded into the firmware
+as a fallback, and is also shipped inside the SPIFFS `storage` image. At boot,
+[`save_store_load()`](./save-system#loading-and-precedence) loads it into cartridge RAM
+**only when no valid persisted user save exists** — a persisted save always wins.
 
 ## The delivery gap (why the default save can go missing)
 
@@ -21,15 +21,17 @@ The active ROM and the default save reach the device by **different** mechanisms
 | Artifact | Carried by | Flashed on a plain `pio run -t upload`? |
 | --- | --- | --- |
 | ROM (`roms/active.gb`) | PlatformIO post-script → `0x190000` | ✅ Yes |
-| Default save (`data/save.srm`) | SPIFFS `storage` image | ❌ No — only on `uploadfs` |
+| Default save (`data/save.srm`) | Firmware fallback + SPIFFS `storage` image | ✅ Yes, firmware fallback; SPIFFS copy only on `uploadfs` |
 
 So a normal `upload` flashes the app **and the ROM** (the game appears) but leaves the
-`storage` partition untouched. On a fresh device `/spiffs/save.srm` is then absent,
-`save_store_load()` reports `missing`, and the console reads the blank `0xFF` save.
+`storage` partition untouched. On a fresh device `/spiffs/save.srm` can be absent, but
+`save_store_load()` now falls back to the firmware-embedded default save instead of
+the blank `0xFF` save.
 
 :::info Symptom
-"The game loads but the default savegame doesn't." That is precisely this gap: the ROM
-is delivered, the SPIFFS image (with `save.srm`) is not.
+"The game loads but the default savegame doesn't." The firmware now closes this gap by
+embedding `data/save.srm`; the SPIFFS copy is still useful for web access and as the
+mutable persisted save file.
 :::
 
 ## How the bundled save is generated
@@ -52,9 +54,10 @@ extra_scripts =
 	post:scripts/platformio_active_rom.py
 ```
 
-`main/CMakeLists.txt` then builds the image from `data/` via
-`spiffs_create_partition_image(storage "${WEB_UI_DIST_DIR}" FLASH_IN_PROJECT)` — the
-refreshed `save.srm` is included.
+`main/web_assets.S` embeds the refreshed `save.srm` into the firmware as a fallback.
+`main/CMakeLists.txt` also builds the SPIFFS image from `data/` via
+`spiffs_create_partition_image(storage "${WEB_UI_DIST_DIR}" FLASH_IN_PROJECT)`, so the
+refreshed `save.srm` is included when `uploadfs` is used.
 
 ## Delivering it to a device
 
@@ -76,7 +79,7 @@ save in `storage` intact. See [Flashing & Provisioning](../build-and-flash/flash
 
 1. Erase the device (`pio run -t erase` / `idf.py erase-flash`).
 2. `cd webui && npm run upload:all`, then capture the boot log.
-3. Confirm `save_store_load()` reports the save **loaded** (not `missing`).
+3. Confirm `save_store_load()` reports `default` or `persisted` (not `missing`).
 4. Confirm the console — or `GET /api/save` — reads the bundled bytes, not `0xFF`.
 5. Confirm an in-game save then persists and takes precedence on the next boot.
 

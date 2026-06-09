@@ -11,7 +11,7 @@ namespace board {
 
 // N64 controller port
 #ifndef N64_JOYBUS_DATA_GPIO
-#define N64_JOYBUS_DATA_GPIO 4
+#define N64_JOYBUS_DATA_GPIO 7
 #endif
 
 static constexpr int PIN_N64_JOYBUS_DATA = N64_JOYBUS_DATA_GPIO;
@@ -116,6 +116,58 @@ static constexpr uint16_t WEB_SOCKET_PORT = 80;  // unified with HTTP under esp_
 // the AP without saturating LWIP/wifi TX buffers (which manifests as
 // `httpd_sock_err: error in send : 119` and the WS framing getting corrupted).
 static constexpr uint16_t WEB_STREAM_INTERVAL_MS = 100;
+
+// Wi-Fi station provisioning. When home-network credentials are stored in NVS the
+// device joins that network (AP+STA), so an R36S / phone on the same LAN can reach
+// the portal and WebSocket; the setup AP stays up as a re-provisioning fallback.
+static constexpr const char *WIFI_NVS_NAMESPACE = "wifi";
+static constexpr const char *WIFI_NVS_KEY_SSID = "ssid";
+static constexpr const char *WIFI_NVS_KEY_PASS = "pass";
+// Reconnect attempts before giving up on a stored network (AP remains available).
+static constexpr int WIFI_STA_MAX_RETRIES = 8;
+
+// Optional ESP32-C3 Super Mini 0.42" OLED status display. Disabled by default so
+// existing boards do not reserve GPIO5/GPIO6 or initialize I2C unless requested.
+#ifndef OLED_STATUS_ENABLED
+#define OLED_STATUS_ENABLED 0
+#endif
+#ifndef OLED_I2C_SDA_GPIO
+#define OLED_I2C_SDA_GPIO 5
+#endif
+#ifndef OLED_I2C_SCL_GPIO
+#define OLED_I2C_SCL_GPIO 6
+#endif
+#ifndef OLED_I2C_ADDRESS
+#define OLED_I2C_ADDRESS 0x3C
+#endif
+#ifndef OLED_I2C_HZ
+#define OLED_I2C_HZ 400000
+#endif
+#ifndef OLED_VISIBLE_WIDTH
+#define OLED_VISIBLE_WIDTH 72
+#endif
+#ifndef OLED_VISIBLE_HEIGHT
+#define OLED_VISIBLE_HEIGHT 40
+#endif
+#ifndef OLED_X_OFFSET
+#define OLED_X_OFFSET 30
+#endif
+#ifndef OLED_Y_OFFSET
+#define OLED_Y_OFFSET 24
+#endif
+
+static constexpr bool OLED_STATUS_DISPLAY_ENABLED =
+    OLED_STATUS_ENABLED != 0;
+static constexpr int PIN_OLED_I2C_SDA = OLED_I2C_SDA_GPIO;
+static constexpr int PIN_OLED_I2C_SCL = OLED_I2C_SCL_GPIO;
+static constexpr uint8_t OLED_ADDRESS = OLED_I2C_ADDRESS;
+static constexpr uint32_t OLED_BUS_HZ = OLED_I2C_HZ;
+static constexpr int OLED_LOGICAL_WIDTH = OLED_VISIBLE_WIDTH;
+static constexpr int OLED_LOGICAL_HEIGHT = OLED_VISIBLE_HEIGHT;
+static constexpr int OLED_BUFFER_WIDTH = 128;
+static constexpr int OLED_BUFFER_HEIGHT = 64;
+static constexpr int OLED_DRAW_X_OFFSET = OLED_X_OFFSET;
+static constexpr int OLED_DRAW_Y_OFFSET = OLED_Y_OFFSET;
 
 static constexpr bool AUDIO_ENABLED = GB_ENABLE_AUDIO != 0;
 static constexpr bool WEB_AUDIO_ENABLED = AUDIO_ENABLED;

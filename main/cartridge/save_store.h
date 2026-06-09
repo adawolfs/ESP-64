@@ -12,6 +12,8 @@ enum SaveStoreLoadResult : uint8_t {
   SAVE_STORE_LOAD_INVALID_SIZE,
   SAVE_STORE_LOAD_NO_MEMORY,
   SAVE_STORE_LOAD_READ_FAILED,
+  SAVE_STORE_LOAD_DEFAULT,
+  SAVE_STORE_LOAD_INVALID_CONTENT,
 };
 
 enum SaveStoreFlushResult : uint8_t {
@@ -52,8 +54,9 @@ struct SaveStoreStatus {
   size_t last_load_size;
 };
 
-// Loads a persisted save from SPIFFS into the cartridge, taking precedence over
-// the embedded default. Returns true if a valid persisted save was applied.
+// Loads a save into the cartridge. A valid persisted save from SPIFFS wins; when
+// it is missing or unreadable, the firmware-embedded bundled default is applied.
+// Returns true if any valid save was applied.
 // Requires SPIFFS to be mounted first.
 bool save_store_load(void);
 

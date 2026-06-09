@@ -16,7 +16,7 @@ and networking are deferred to the loop.
 
 ```text
 [N64 Controller Port]
-        │  single-wire open-drain Joy-Bus (GPIO4)
+        │  single-wire open-drain Joy-Bus (GPIO7)
         ▼
 ┌──────────────────────────── ESP32-C3 ────────────────────────────┐
 │                                                                   │

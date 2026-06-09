@@ -47,6 +47,51 @@ struct EmgSlotHeader {
 
 bool emg_slot_armed = false;
 
+extern "C" const uint8_t bundled_save_srm_start[] asm("bundled_save_srm_start");
+extern "C" const uint8_t bundled_save_srm_end[] asm("bundled_save_srm_end");
+
+size_t bundled_save_size(void) {
+  return static_cast<size_t>(bundled_save_srm_end - bundled_save_srm_start);
+}
+
+void reset_save_tracking_state() {
+  seq_initialized = true;
+  last_seq = gb_cartridge_save_write_seq();
+  status.observed_write_seq = last_seq;
+  status.last_persisted_seq = last_seq;
+  status.pending = false;
+  dirty_logged = false;
+}
+
+bool load_bundled_default_save(const char *reason) {
+  const size_t size = gb_cartridge_save_size();
+  const size_t actual = bundled_save_size();
+  status.persisted = false;
+  status.loaded_persisted = false;
+  status.last_load_size = actual;
+  if (actual != size) {
+    status.load_result = SAVE_STORE_LOAD_INVALID_SIZE;
+    ESP_LOGW(TAG, "bundled default save invalid size %u/%u after %s",
+             (unsigned)actual, (unsigned)size, reason ? reason : "fallback");
+    gb_cartridge_save_tracking_reset();
+    reset_save_tracking_state();
+    return false;
+  }
+  if (!gb_cartridge_load_save(bundled_save_srm_start, size)) {
+    status.load_result = SAVE_STORE_LOAD_READ_FAILED;
+    ESP_LOGW(TAG, "bundled default save load failed after %s",
+             reason ? reason : "fallback");
+    gb_cartridge_save_tracking_reset();
+    reset_save_tracking_state();
+    return false;
+  }
+  status.load_result = SAVE_STORE_LOAD_DEFAULT;
+  reset_save_tracking_state();
+  ESP_LOGI(TAG, "loaded bundled default save (%u bytes, reason=%s)",
+           (unsigned)size, reason ? reason : "fallback");
+  return true;
+}
+
 const esp_partition_t *emg_partition(void) {
   static const esp_partition_t *part = nullptr;
   static bool searched = false;
@@ -87,6 +132,18 @@ bool valid_save_file(const char *path, size_t expected, size_t *actual_out) {
   }
   if (actual_out) *actual_out = actual;
   return actual == expected;
+}
+
+bool plausible_save_content(const uint8_t *data, size_t size) {
+  if (!data || size == 0) return false;
+  size_t non_ff = 0;
+  for (size_t i = 0; i < size; ++i) {
+    if (data[i] != 0xFF) ++non_ff;
+  }
+  // Blank SRAM is 0xFF. A few stray programmed bytes can be left by a failed or
+  // interrupted flash/write, so require meaningful content before trusting a
+  // persisted save over the firmware-embedded default.
+  return non_ff >= 512;
 }
 
 bool close_checked(FILE *f) {
@@ -175,40 +232,36 @@ bool save_store_load(void) {
   size_t actual = 0;
   if (!file_size(save_path(), &actual)) {
     status.load_result = SAVE_STORE_LOAD_MISSING;
-    ESP_LOGI(TAG, "no persisted save; using bundled default");
-    gb_cartridge_save_tracking_reset();
-    seq_initialized = true;
-    last_seq = gb_cartridge_save_write_seq();
-    status.observed_write_seq = last_seq;
-    status.last_persisted_seq = last_seq;
-    return false;
+    ESP_LOGI(TAG, "no persisted save; loading bundled default");
+    return load_bundled_default_save("missing");
   }
   status.last_load_size = actual;
   if (actual != size) {
     status.load_result = SAVE_STORE_LOAD_INVALID_SIZE;
-    ESP_LOGW(TAG, "persisted save invalid size %u/%u; using bundled default",
+    ESP_LOGW(TAG, "persisted save invalid size %u/%u; loading bundled default",
              (unsigned)actual, (unsigned)size);
-    gb_cartridge_save_tracking_reset();
-    seq_initialized = true;
-    last_seq = gb_cartridge_save_write_seq();
-    status.observed_write_seq = last_seq;
-    status.last_persisted_seq = last_seq;
-    return false;
+    return load_bundled_default_save("invalid_size");
   }
 
   FILE *f = fopen(save_path(), "rb");
   if (!f) {
     status.load_result = SAVE_STORE_LOAD_READ_FAILED;
-    return false;
+    return load_bundled_default_save("open_failed");
   }
   uint8_t *buf = static_cast<uint8_t *>(malloc(size));
   if (!buf) {
     fclose(f);
     status.load_result = SAVE_STORE_LOAD_NO_MEMORY;
-    return false;
+    return load_bundled_default_save("no_memory");
   }
   const size_t n = fread(buf, 1, size, f);
   fclose(f);
+  if (n == size && !plausible_save_content(buf, size)) {
+    free(buf);
+    status.load_result = SAVE_STORE_LOAD_INVALID_CONTENT;
+    ESP_LOGW(TAG, "persisted save content looks blank; loading bundled default");
+    return load_bundled_default_save("invalid_content");
+  }
   const bool ok = (n == size) && gb_cartridge_load_save(buf, size);
   free(buf);
   if (ok) {
@@ -224,8 +277,9 @@ bool save_store_load(void) {
     ESP_LOGI(TAG, "loaded persisted save (%u bytes)", (unsigned)size);
   } else {
     status.load_result = SAVE_STORE_LOAD_READ_FAILED;
-    ESP_LOGW(TAG, "persisted save read failed (%u/%u); using bundled default",
+    ESP_LOGW(TAG, "persisted save read failed (%u/%u); loading bundled default",
              (unsigned)n, (unsigned)size);
+    return load_bundled_default_save("read_failed");
   }
   return ok;
 }
@@ -372,6 +426,7 @@ bool save_store_reset(void) {
   status.load_result = SAVE_STORE_LOAD_MISSING;
   status.flush_result = SAVE_STORE_FLUSH_NONE;
   status.last_flush_ok = false;
+  load_bundled_default_save("reset");
   return removed_save && removed_tmp;
 }
 
@@ -387,6 +442,8 @@ const char *save_store_load_result_name(SaveStoreLoadResult result) {
     case SAVE_STORE_LOAD_INVALID_SIZE: return "invalid_size";
     case SAVE_STORE_LOAD_NO_MEMORY: return "no_memory";
     case SAVE_STORE_LOAD_READ_FAILED: return "read_failed";
+    case SAVE_STORE_LOAD_DEFAULT: return "default";
+    case SAVE_STORE_LOAD_INVALID_CONTENT: return "invalid_content";
   }
   return "unknown";
 }

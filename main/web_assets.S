@@ -48,3 +48,10 @@ web_asset_sw_js_start:
 web_asset_sw_js_end:
     .byte 0
     .balign 4
+
+    .global bundled_save_srm_start
+    .global bundled_save_srm_end
+bundled_save_srm_start:
+    .incbin "data/save.srm"
+bundled_save_srm_end:
+    .balign 4

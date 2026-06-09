@@ -71,6 +71,46 @@ idf.py build
 idf.py -p PORT flash monitor
 ```
 
+## ESP32-C3 0.42 OLED status display
+
+OLED status display support is compile-time optional and is disabled by default.
+Default builds do not initialize I2C and do not reserve the OLED pins.
+
+Enable it for the ESP32-C3 Super Mini 0.42-inch OLED board with:
+
+```bash
+PLATFORMIO_BUILD_FLAGS="-DOLED_STATUS_ENABLED=1" pio run
+```
+
+To flash the OLED-enabled firmware:
+
+```bash
+PLATFORMIO_BUILD_FLAGS="-DOLED_STATUS_ENABLED=1" pio run --target upload
+```
+
+Rollback is a normal build without the flag, or an explicit disabled build:
+
+```bash
+PLATFORMIO_BUILD_FLAGS="-DOLED_STATUS_ENABLED=0" pio run --target upload
+```
+
+When enabled, the firmware drives the onboard SSD1306-compatible display at I2C
+address `0x3C`, using GPIO5 for SDA and GPIO6 for SCL. The driver renders into
+the 72x40 visible window inside the 128x64 controller buffer using offset `(30,24)`.
+
+Expected OLED status messages include:
+
+- `BOOT`, `READY`, and `RUNTIME FAIL` during startup.
+- AP/STA network mode and the reachable IP address.
+- Loaded Game Boy title, ROM/header status, save load/flush state, pending save,
+  and recovered-save indication.
+- ROM/save upload receiving, success, rejected, and failed states.
+- Compact Transfer Pak/accessory/link indicators.
+
+Validation on the actual OLED board should confirm the boot test pattern is inside
+the visible 72x40 region, the above status pages are readable, and gameplay or
+Transfer Pak timing remains stable while OLED updates are enabled.
+
 ## Audio toggle
 
 `GB_ENABLE_AUDIO` (default `1`) compiles in the APU/WebSocket audio path. Build with

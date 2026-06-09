@@ -13,6 +13,7 @@
 #include "pokemon_stadium_compat.h"
 #include "power_monitor.h"
 #include "save_store.h"
+#include "status_display.h"
 #include "transfer_pak.h"
 #include "web_portal.h"
 
@@ -28,6 +29,8 @@ uint32_t last_joybus_activity_ms = 0;
 uint32_t last_idle_delay_ms = 0;
 uint32_t last_joybus_debug_ms = 0;
 uint32_t last_rmt_accessory_activity_ms = 0;
+uint32_t last_status_display_ms = 0;
+bool recovered_power_loss_save = false;
 
 #ifdef N64_JOYBUS_BITBANG
 constexpr bool USE_RMT_JOYBUS = false;
@@ -87,6 +90,39 @@ void log_joybus_debug(uint32_t now_ms) {
     ESP_LOGI(TAG, "acc[%lu] %s", (unsigned long)acc_count, trace);
   }
 }
+
+void publish_status_display(uint32_t now_ms) {
+  if (last_status_display_ms != 0 &&
+      now_ms - last_status_display_ms < 250) {
+    return;
+  }
+  last_status_display_ms = now_ms;
+
+  const GbCartridgeStatus &cart = gb_cartridge_status();
+  const SaveStoreStatus &store = save_store_status();
+  const PokemonStadiumCompatStatus compat = pokemon_stadium_compat_status();
+  const TransferPakStatus &pak = transfer_pak_status();
+  const bool link_active =
+      last_joybus_activity_ms != 0 && now_ms - last_joybus_activity_ms < 1500;
+
+  status_display_set_game({
+      cart.title,
+      cart.rom_loaded,
+      compat.rom_header_ok,
+  });
+  status_display_set_save({
+      save_store_load_result_name(store.load_result),
+      save_store_flush_result_name(store.flush_result),
+      store.persisted || store.loaded_persisted,
+      store.pending,
+      recovered_power_loss_save,
+  });
+  status_display_set_runtime({
+      compat.accessory_present,
+      pak.powered,
+      link_active,
+  });
+}
 }  // namespace
 
 bool n64_runtime_init(void) {
@@ -102,17 +138,24 @@ bool n64_runtime_init(void) {
   }
 
   web_portal_mount_storage();
-  if (save_store_load()) {
+  const bool save_loaded = save_store_load();
+  if (save_loaded &&
+      save_store_status().load_result == SAVE_STORE_LOAD_PERSISTED) {
     ESP_LOGI(TAG, "using persisted cartridge save (%s)",
              save_store_load_result_name(save_store_status().load_result));
+  } else if (save_loaded) {
+    ESP_LOGI(TAG, "using bundled cartridge save (%s)",
+             save_store_load_result_name(save_store_status().load_result));
   } else {
-    ESP_LOGI(TAG, "using embedded cartridge save (%s)",
+    ESP_LOGI(TAG, "using blank cartridge save (%s)",
              save_store_load_result_name(save_store_status().load_result));
   }
   // Adopt a save captured during a previous power-loss (if any), then ensure the
   // emergency slot is armed for the next ride-down.
   if (save_store_recover_power_loss_slot()) {
+    recovered_power_loss_save = true;
     ESP_LOGI(TAG, "recovered save from power-loss emergency slot");
+    status_display_set_message(StatusDisplayMessageLevel::Info, "SAVE RECOVER");
   }
 
   if (USE_RMT_JOYBUS) {
@@ -143,6 +186,7 @@ bool n64_runtime_init(void) {
   ESP_LOGI(TAG, "N64 runtime ready ip=%s title=%s accessory=%d header=%d",
            web_portal_ip(), gb_cartridge_status().title,
            compat.accessory_present, compat.rom_header_ok);
+  publish_status_display(millis());
   return true;
 }
 
@@ -174,6 +218,8 @@ void n64_runtime_loop(void) {
 
     if (accessory_web_quiet) service_web(now_ms);
     save_store_service(now_ms, accessory_save_quiet);
+    publish_status_display(now_ms);
+    status_display_service(now_ms);
 
     // RMT callbacks own the Joy-Bus response timing. The main task must still
     // block briefly so the idle task can feed the watchdog during GB Tower's
@@ -188,6 +234,8 @@ void n64_runtime_loop(void) {
   service_web(now_ms);
   save_store_service(now_ms);
   log_joybus_debug(now_ms);
+  publish_status_display(now_ms);
+  status_display_service(now_ms);
 
   const bool bus_quiet =
       now_ms - last_joybus_activity_ms >= JOYBUS_QUIET_BEFORE_DELAY_MS;

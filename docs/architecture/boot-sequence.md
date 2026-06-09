@@ -25,8 +25,8 @@ description: What happens between power-on and a ready Joy-Bus, including the sa
    fails if a present ROM reads back wrong.
 4. **`web_portal_mount_storage()`** — mounts SPIFFS (`storage` partition) at
    `/spiffs`, formatting on mount failure so the FS self-heals after a chip erase.
-5. **`save_store_load()`** — loads the persisted save with precedence over the blank
-   default (see below).
+5. **`save_store_load()`** — loads a persisted save, falling back to the
+   firmware-embedded bundled default before the blank save cache (see below).
 6. **`save_store_recover_power_loss_slot()`** — adopts a save captured during a
    previous power-loss ride-down, if present, then re-arms the emergency slot.
 7. **Joy-Bus init** — `joybus_rmt_init()` (default) or `n64_joybus_init()` (bit-bang
@@ -42,21 +42,21 @@ At boot the active save is chosen in this order:
 ```text
 1. Persisted user save   (/spiffs/save.srm, must be exactly 32 KB)
 2. Emergency slot save    (valid CRC in the emgsave partition, from a power loss)
-3. Bundled default save   (data/save.srm, shipped in the SPIFFS image)
+3. Bundled default save   (embedded into firmware from data/save.srm)
 4. Blank 0xFF stub        (no save available)
 ```
 
 `save_store_load()` returns the load result, surfaced in logs and the status struct
-as one of `persisted`, `missing`, `invalid_size`, `no_memory`, or `read_failed`. A
-fresh device with the bundled default flashed reports the save as **loaded**, not
-`missing`. See [Default Save](../cartridge/default-save) for how the bundled save is
-delivered.
+as one of `persisted`, `default`, `missing`, `invalid_size`, `invalid_content`,
+`no_memory`, or `read_failed`. A fresh device with no valid SPIFFS save reports `default`, not
+`missing`, because the firmware carries a 32 KB fallback copy. See
+[Default Save](../cartridge/default-save) for how the bundled save is delivered.
 
 :::warning Fresh device with no SPIFFS image
 If the `storage` partition was never flashed (e.g. a plain `upload` that skips the
-filesystem image), `/spiffs/save.srm` is absent, the load result is `missing`, and
-the console reads the blank `0xFF` save. This is the exact failure that the
-[default-save delivery](../cartridge/default-save) fix addresses.
+filesystem image), `/spiffs/save.srm` is absent. The firmware falls back to the
+embedded bundled default save, so the web UI may be missing but the cartridge save
+still initializes from the bundled save.
 :::
 
 ## The runtime loop

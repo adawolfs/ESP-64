@@ -24,9 +24,11 @@
 #include "n64_accessory.h"
 #include "n64_controller.h"
 #include "n64_joybus.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 #include "pokemon_stadium_compat.h"
 #include "save_store.h"
+#include "status_display.h"
 #include "transfer_pak.h"
 
 namespace {
@@ -39,7 +41,12 @@ constexpr uint32_t WS_SCAN_ACTIVE_INTERVAL_MS = 1000;
 
 WebPortalConfig portal_config;
 httpd_handle_t server = nullptr;
-char ip_string[16] = "0.0.0.0";
+char ip_string[16] = "0.0.0.0";      // AP IP (always available for setup)
+char sta_ip_string[16] = "0.0.0.0";  // STA IP once joined to the home network
+bool sta_provisioned = false;        // credentials are stored in NVS
+bool sta_connected = false;          // currently joined with an IP
+int sta_retry_count = 0;
+esp_netif_t *sta_netif = nullptr;
 bool spiffs_mounted = false;
 uint32_t last_state_publish_ms = 0;
 uint32_t last_client_scan_ms = 0;
@@ -166,6 +173,29 @@ void register_client(int fd) {
   mark_fd_dead(old_fd, 0);
   trigger_session_close(old_fd);
   ESP_LOGW(TAG, "WS client fd=%d replaced stale fd=%d", fd, old_fd);
+}
+
+void publish_wifi_status() {
+  status_display_set_wifi({
+      true,
+      sta_connected,
+      ip_string,
+      sta_ip_string,
+  });
+}
+
+void publish_upload_status(StatusDisplayUploadKind kind,
+                           StatusDisplayUploadPhase phase,
+                           size_t bytes_done,
+                           size_t bytes_total,
+                           const char *detail = nullptr) {
+  status_display_set_upload({
+      kind,
+      phase,
+      bytes_done,
+      bytes_total,
+      detail,
+  });
 }
 
 esp_err_t on_http_client_open(httpd_handle_t hd, int sockfd) {
@@ -346,6 +376,7 @@ size_t build_state_json(char *out, size_t out_cap) {
   return snprintf(
       out, out_cap,
       "{\"type\":\"state\",\"network\":{\"ssid\":\"%s\",\"ip\":\"%s\","
+      "\"staIp\":\"%s\",\"staConnected\":%s,\"provisioned\":%s,"
       "\"socketClients\":%u,\"websocketPort\":%u},"
       "\"memory\":{\"freeHeap\":%lu,\"minFreeHeap\":%lu},"
       "\"controller\":{\"buttons\":%u,\"stickX\":%d,\"stickY\":%d},"
@@ -372,7 +403,9 @@ size_t build_state_json(char *out, size_t out_cap) {
       "\"joybusResponseFailures\":%lu,\"joybusDroppedStarts\":%lu,"
       "\"accessoryReads\":%lu,"
       "\"accessoryWrites\":%lu,\"accessoryMalformed\":%lu}}",
-      ssid_esc, ip_string, active_ws_count(), portal_config.websocket_port,
+      ssid_esc, ip_string, sta_ip_string, sta_connected ? "true" : "false",
+      sta_provisioned ? "true" : "false", active_ws_count(),
+      portal_config.websocket_port,
       (unsigned long)esp_get_free_heap_size(),
       (unsigned long)esp_get_minimum_free_heap_size(), controller.buttons,
       controller.stick_x, controller.stick_y, pak.powered ? "true" : "false",
@@ -465,6 +498,23 @@ bool extract_bool_field(const char *json, const char *field, bool *value) {
     return true;
   }
   return false;
+}
+
+// Extracts a (possibly signed) integer JSON field. Returns false if absent.
+bool extract_int_field(const char *json, const char *field, int *value) {
+  char token[32];
+  snprintf(token, sizeof(token), "\"%s\"", field);
+  const char *p = strstr(json, token);
+  if (!p) return false;
+  p = strchr(p + strlen(token), ':');
+  if (!p) return false;
+  p++;
+  while (*p == ' ' || *p == '\t' || *p == '"') p++;
+  char *end = nullptr;
+  long v = strtol(p, &end, 10);
+  if (end == p) return false;
+  *value = (int)v;
+  return true;
 }
 
 bool find_form_value(const char *body, const char *key, char *out, size_t cap) {
@@ -565,16 +615,25 @@ esp_err_t handle_api_save_post(httpd_req_t *req) {
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   if (req->content_len != expected) {
+    publish_upload_status(StatusDisplayUploadKind::Save,
+                          StatusDisplayUploadPhase::Rejected, 0,
+                          req->content_len, "BAD SIZE");
     httpd_resp_set_status(req, "400 Bad Request");
     httpd_resp_sendstr(req, "{\"loaded\":false,\"error\":\"bad size\"}");
     return ESP_OK;
   }
   uint8_t *buf = static_cast<uint8_t *>(malloc(expected));
   if (!buf) {
+    publish_upload_status(StatusDisplayUploadKind::Save,
+                          StatusDisplayUploadPhase::Failed, 0, expected,
+                          "NO MEM");
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, nullptr);
     return ESP_FAIL;
   }
   size_t got = 0;
+  publish_upload_status(StatusDisplayUploadKind::Save,
+                        StatusDisplayUploadPhase::Receiving, 0, expected,
+                        "RECV");
   while (got < expected) {
     int r = httpd_req_recv(req, reinterpret_cast<char *>(buf) + got,
                            expected - got);
@@ -583,6 +642,9 @@ esp_err_t handle_api_save_post(httpd_req_t *req) {
       break;
     }
     got += r;
+    publish_upload_status(StatusDisplayUploadKind::Save,
+                          StatusDisplayUploadPhase::Receiving, got, expected,
+                          "RECV");
   }
   bool ok = got == expected;
   if (ok) {
@@ -593,6 +655,10 @@ esp_err_t handle_api_save_post(httpd_req_t *req) {
     save_store_set_busy(false);
   }
   free(buf);
+  publish_upload_status(StatusDisplayUploadKind::Save,
+                        ok ? StatusDisplayUploadPhase::Success
+                           : StatusDisplayUploadPhase::Failed,
+                        got, expected, ok ? "LOADED" : "FAILED");
   httpd_resp_sendstr(req, ok ? "{\"loaded\":true}" : "{\"loaded\":false}");
   return ESP_OK;
 }
@@ -605,6 +671,10 @@ esp_err_t handle_api_rom_post(httpd_req_t *req) {
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   const int total = req->content_len;
   if (total <= 0x150 || total > 0x100000) {
+    publish_upload_status(StatusDisplayUploadKind::Rom,
+                          StatusDisplayUploadPhase::Rejected, 0,
+                          static_cast<size_t>(total > 0 ? total : 0),
+                          "BAD SIZE");
     httpd_resp_set_status(req, "400 Bad Request");
     httpd_resp_sendstr(req, "{\"loaded\":false,\"error\":\"bad size\"}");
     return ESP_OK;
@@ -616,6 +686,9 @@ esp_err_t handle_api_rom_post(httpd_req_t *req) {
   if (!sec || !first_sec) {
     free(sec);
     free(first_sec);
+    publish_upload_status(StatusDisplayUploadKind::Rom,
+                          StatusDisplayUploadPhase::Failed, 0,
+                          static_cast<size_t>(total), "NO MEM");
     httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, nullptr);
     return ESP_FAIL;
   }
@@ -623,6 +696,9 @@ esp_err_t handle_api_rom_post(httpd_req_t *req) {
   save_store_set_busy(true);
   joybus_rmt_pause();
   bool ok = gb_cartridge_rom_write_begin(static_cast<size_t>(total));
+  publish_upload_status(StatusDisplayUploadKind::Rom,
+                        StatusDisplayUploadPhase::Receiving, 0,
+                        static_cast<size_t>(total), "RECV");
   size_t flash_off = 0;
   size_t sec_fill = 0;
   int received = 0;
@@ -637,6 +713,10 @@ esp_err_t handle_api_rom_post(httpd_req_t *req) {
     }
     sec_fill += r;
     received += r;
+    publish_upload_status(StatusDisplayUploadKind::Rom,
+                          StatusDisplayUploadPhase::Receiving,
+                          static_cast<size_t>(received),
+                          static_cast<size_t>(total), "RECV");
     if (sec_fill == kSector) {
       if (flash_off == 0) {
         memcpy(first_sec, sec, kSector);
@@ -676,6 +756,12 @@ esp_err_t handle_api_rom_post(httpd_req_t *req) {
   }
   joybus_rmt_resume();
   save_store_set_busy(false);
+  publish_upload_status(StatusDisplayUploadKind::Rom,
+                        ok ? StatusDisplayUploadPhase::Success
+                           : StatusDisplayUploadPhase::Failed,
+                        static_cast<size_t>(received),
+                        static_cast<size_t>(total),
+                        ok ? gb_cartridge_status().title : "FAILED");
 
   char body[96];
   int n = snprintf(body, sizeof(body),
@@ -716,6 +802,97 @@ esp_err_t handle_api_input(httpd_req_t *req) {
                        !strcmp(pressed_arg, "down");
   if (control[0]) n64_controller_set_control(control, pressed);
   return handle_api_state(req);
+}
+
+// Wi-Fi helpers are defined further below (next to the Wi-Fi bring-up); declare them
+// here so the /api/wifi handlers can use them.
+bool save_wifi_creds(const char *ssid, const char *pass);
+bool wifi_sta_connect(const char *ssid, const char *pass);
+
+// GET /api/wifi — report provisioning / station status so a client can confirm the
+// device joined the home network and learn the reachable STA IP.
+esp_err_t handle_api_wifi_get(httpd_req_t *req) {
+  char body[160];
+  int n = snprintf(body, sizeof(body),
+                   "{\"provisioned\":%s,\"connected\":%s,\"staIp\":\"%s\","
+                   "\"apIp\":\"%s\"}",
+                   sta_provisioned ? "true" : "false",
+                   sta_connected ? "true" : "false", sta_ip_string, ip_string);
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_send(req, body, n);
+  return ESP_OK;
+}
+
+// POST /api/wifi — provision the home network. Accepts form-encoded
+// (`ssid=..&password=..`) or JSON (`{"ssid":"..","password":".."}`). Persists the
+// credentials and starts a join; the device stays reachable on the setup AP.
+esp_err_t handle_api_wifi_post(httpd_req_t *req) {
+  char body[256];
+  int total = 0;
+  int to_read = req->content_len;
+  if (to_read > (int)sizeof(body) - 1) to_read = sizeof(body) - 1;
+  while (total < to_read) {
+    int r = httpd_req_recv(req, body + total, to_read - total);
+    if (r <= 0) {
+      if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+      break;
+    }
+    total += r;
+  }
+  body[total >= 0 ? total : 0] = '\0';
+
+  char ssid[33] = {};
+  char pass[65] = {};
+  // Try JSON first, then fall back to form-encoded.
+  if (!extract_string_field(body, "ssid", ssid, sizeof(ssid))) {
+    find_form_value(body, "ssid", ssid, sizeof(ssid));
+  }
+  if (!extract_string_field(body, "password", pass, sizeof(pass))) {
+    find_form_value(body, "password", pass, sizeof(pass));
+  }
+
+  httpd_resp_set_type(req, "application/json");
+  if (ssid[0] == '\0') {
+    httpd_resp_set_status(req, "400 Bad Request");
+    httpd_resp_sendstr(req, "{\"saved\":false,\"error\":\"ssid required\"}");
+    return ESP_OK;
+  }
+  const bool saved = save_wifi_creds(ssid, pass);
+  if (saved) wifi_sta_connect(ssid, pass);
+  httpd_resp_sendstr(req, saved ? "{\"saved\":true,\"connecting\":true}"
+                                : "{\"saved\":false}");
+  return ESP_OK;
+}
+
+// GET /wifi — a self-contained Wi-Fi setup page. Embedded in the firmware so it works
+// on the bare setup AP even before the SPIFFS web UI is flashed.
+esp_err_t handle_wifi_page(httpd_req_t *req) {
+  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  httpd_resp_sendstr(
+      req,
+      "<!doctype html><meta name=viewport content='width=device-width'>"
+      "<title>espN64 Wi-Fi setup</title>"
+      "<body style='font-family:sans-serif;max-width:24rem;margin:2rem auto'>"
+      "<h1>espN64 Wi-Fi setup</h1>"
+      "<p>Join the device to your home network so the R36S (and other devices) "
+      "can reach it.</p>"
+      "<form id=f><label>Network (SSID)<br><input name=ssid required "
+      "style='width:100%'></label><br><br>"
+      "<label>Password<br><input name=password type=password "
+      "style='width:100%'></label><br><br>"
+      "<button>Save &amp; connect</button></form>"
+      "<pre id=s></pre>"
+      "<script>"
+      "const s=document.getElementById('s');"
+      "async function st(){try{const r=await fetch('/api/wifi');const j=await "
+      "r.json();s.textContent='provisioned='+j.provisioned+' connected='+"
+      "j.connected+' staIp='+j.staIp;}catch(e){s.textContent=e;}}"
+      "document.getElementById('f').onsubmit=async(e)=>{e.preventDefault();"
+      "const d=new FormData(e.target);const b=new URLSearchParams(d);"
+      "s.textContent='saving...';await fetch('/api/wifi',{method:'POST',body:b});"
+      "setTimeout(st,1500);};st();setInterval(st,3000);"
+      "</script></body>");
+  return ESP_OK;
 }
 
 esp_err_t handle_static(httpd_req_t *req) {
@@ -787,6 +964,18 @@ esp_err_t handle_ws(httpd_req_t *req) {
         n64_controller_set_control(control, pressed);
         publish_state_throttled(0, false);
       }
+    } else if (!strcmp(type_value, "stick")) {
+      // Analog stick from a gamepad client (e.g. the R36S). x/y are signed and
+      // clamped to the N64 controller's int8 range.
+      int x = 0, y = 0;
+      const bool have_x = extract_int_field((const char *)buf, "x", &x);
+      const bool have_y = extract_int_field((const char *)buf, "y", &y);
+      if (have_x || have_y) {
+        if (x < -128) x = -128; else if (x > 127) x = 127;
+        if (y < -128) y = -128; else if (y > 127) y = 127;
+        n64_controller_set_stick((int8_t)x, (int8_t)y);
+        publish_state_throttled(0, false);
+      }
     } else if (!strcmp(type_value, "state")) {
       publish_state_throttled(0, true);
     }
@@ -823,7 +1012,111 @@ bool mount_spiffs() {
   return true;
 }
 
+bool ensure_nvs() {
+  static bool nvs_initialized = false;
+  if (nvs_initialized) return true;
+  esp_err_t e = nvs_flash_init();
+  if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    nvs_flash_erase();
+    e = nvs_flash_init();
+  }
+  if (e != ESP_OK) {
+    ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(e));
+    return false;
+  }
+  nvs_initialized = true;
+  return true;
+}
+
+// Loads stored home-network credentials. Returns true only when a non-empty SSID
+// is present. `pass` may come back empty (open networks).
+bool load_wifi_creds(char *ssid, size_t ssid_cap, char *pass, size_t pass_cap) {
+  if (!ensure_nvs()) return false;
+  nvs_handle_t h;
+  if (nvs_open(board::WIFI_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK) return false;
+  size_t sl = ssid_cap, pl = pass_cap;
+  ssid[0] = '\0';
+  pass[0] = '\0';
+  esp_err_t es = nvs_get_str(h, board::WIFI_NVS_KEY_SSID, ssid, &sl);
+  nvs_get_str(h, board::WIFI_NVS_KEY_PASS, pass, &pl);
+  nvs_close(h);
+  return es == ESP_OK && ssid[0] != '\0';
+}
+
+bool save_wifi_creds(const char *ssid, const char *pass) {
+  if (!ensure_nvs()) return false;
+  nvs_handle_t h;
+  if (nvs_open(board::WIFI_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
+  esp_err_t e = nvs_set_str(h, board::WIFI_NVS_KEY_SSID, ssid ? ssid : "");
+  if (e == ESP_OK) e = nvs_set_str(h, board::WIFI_NVS_KEY_PASS, pass ? pass : "");
+  if (e == ESP_OK) e = nvs_commit(h);
+  nvs_close(h);
+  return e == ESP_OK;
+}
+
+bool clear_wifi_creds() {
+  if (!ensure_nvs()) return false;
+  nvs_handle_t h;
+  if (nvs_open(board::WIFI_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return false;
+  nvs_erase_key(h, board::WIFI_NVS_KEY_SSID);
+  nvs_erase_key(h, board::WIFI_NVS_KEY_PASS);
+  esp_err_t e = nvs_commit(h);
+  nvs_close(h);
+  return e == ESP_OK;
+}
+
+// Applies stored/given credentials to the STA interface and starts a join. Safe to
+// call after Wi-Fi is started; updates sta_provisioned and resets the retry counter.
+bool wifi_sta_connect(const char *ssid, const char *pass) {
+  if (!ssid || ssid[0] == '\0') return false;
+  wifi_config_t sta_cfg = {};
+  strncpy((char *)sta_cfg.sta.ssid, ssid, sizeof(sta_cfg.sta.ssid) - 1);
+  if (pass) strncpy((char *)sta_cfg.sta.password, pass,
+                    sizeof(sta_cfg.sta.password) - 1);
+  sta_cfg.sta.threshold.authmode =
+      (pass && pass[0]) ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+  if (esp_wifi_set_config(WIFI_IF_STA, &sta_cfg) != ESP_OK) return false;
+  sta_retry_count = 0;
+  sta_provisioned = true;
+  esp_wifi_disconnect();
+  esp_err_t e = esp_wifi_connect();
+  ESP_LOGI(TAG, "joining home network SSID=%s (%s)", ssid, esp_err_to_name(e));
+  return e == ESP_OK;
+}
+
 void on_wifi_event(void *, esp_event_base_t base, int32_t id, void *data) {
+  if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+    // Only auto-connect once credentials have been applied (wifi_sta_connect sets
+    // sta_provisioned); avoids a spurious join with an empty config at startup.
+    if (sta_provisioned) esp_wifi_connect();
+    return;
+  }
+  if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+    sta_connected = false;
+    strncpy(sta_ip_string, "0.0.0.0", sizeof(sta_ip_string));
+    publish_wifi_status();
+    if (sta_provisioned && sta_retry_count < board::WIFI_STA_MAX_RETRIES) {
+      sta_retry_count++;
+      ESP_LOGW(TAG, "STA disconnected; retry %d/%d", sta_retry_count,
+               board::WIFI_STA_MAX_RETRIES);
+      esp_wifi_connect();
+    } else if (sta_provisioned) {
+      ESP_LOGW(TAG, "STA join failed after %d retries; setup AP still available",
+               board::WIFI_STA_MAX_RETRIES);
+    }
+    return;
+  }
+  if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+    auto *event = static_cast<ip_event_got_ip_t *>(data);
+    sta_connected = true;
+    sta_retry_count = 0;
+    snprintf(sta_ip_string, sizeof(sta_ip_string), IPSTR,
+             IP2STR(&event->ip_info.ip));
+    ESP_LOGI(TAG, "joined home network: STA ip=%s (reach the portal/WebSocket here)",
+             sta_ip_string);
+    publish_wifi_status();
+    return;
+  }
   if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
     auto *event = static_cast<wifi_event_ap_staconnected_t *>(data);
     ESP_LOGI(TAG, "Station connected: " MACSTR " aid=%u", MAC2STR(event->mac),
@@ -837,19 +1130,7 @@ void on_wifi_event(void *, esp_event_base_t base, int32_t id, void *data) {
 }
 
 bool start_wifi_ap(const WebPortalConfig &config) {
-  static bool nvs_initialized = false;
-  if (!nvs_initialized) {
-    esp_err_t e = nvs_flash_init();
-    if (e == ESP_ERR_NVS_NO_FREE_PAGES || e == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      nvs_flash_erase();
-      e = nvs_flash_init();
-    }
-    if (e != ESP_OK) {
-      ESP_LOGE(TAG, "nvs_flash_init failed: %s", esp_err_to_name(e));
-      return false;
-    }
-    nvs_initialized = true;
-  }
+  if (!ensure_nvs()) return false;
 
   ESP_ERROR_CHECK(esp_netif_init());
   esp_err_t loop_err = esp_event_loop_create_default();
@@ -857,6 +1138,9 @@ bool start_wifi_ap(const WebPortalConfig &config) {
     ESP_ERROR_CHECK(loop_err);
   }
   esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
+  // STA netif so the device can also join a home network; the AP stays up as a
+  // re-provisioning fallback (AP+STA).
+  sta_netif = esp_netif_create_default_wifi_sta();
 
   wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
   ESP_ERROR_CHECK(esp_wifi_init(&wifi_cfg));
@@ -864,6 +1148,9 @@ bool start_wifi_ap(const WebPortalConfig &config) {
   esp_event_handler_instance_t any_inst;
   ESP_ERROR_CHECK(esp_event_handler_instance_register(
       WIFI_EVENT, ESP_EVENT_ANY_ID, &on_wifi_event, nullptr, &any_inst));
+  esp_event_handler_instance_t ip_inst;
+  ESP_ERROR_CHECK(esp_event_handler_instance_register(
+      IP_EVENT, IP_EVENT_STA_GOT_IP, &on_wifi_event, nullptr, &ip_inst));
 
   wifi_config_t ap_cfg = {};
   strncpy((char *)ap_cfg.ap.ssid, config.ap_ssid, sizeof(ap_cfg.ap.ssid) - 1);
@@ -882,7 +1169,7 @@ bool start_wifi_ap(const WebPortalConfig &config) {
   ap_cfg.ap.pmf_cfg.required = false;
 
   ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+  ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
   ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
   esp_wifi_set_ps(WIFI_PS_NONE);
   ESP_ERROR_CHECK(esp_wifi_start());
@@ -892,6 +1179,18 @@ bool start_wifi_ap(const WebPortalConfig &config) {
     snprintf(ip_string, sizeof(ip_string), IPSTR, IP2STR(&ip_info.ip));
   }
   ESP_LOGI(TAG, "AP up: SSID=%s ip=%s", config.ap_ssid, ip_string);
+  publish_wifi_status();
+
+  // If a home network was provisioned earlier, join it now (STA). The got-IP
+  // event records the STA address; failures keep the setup AP available.
+  char ssid[33] = {};
+  char pass[65] = {};
+  if (load_wifi_creds(ssid, sizeof(ssid), pass, sizeof(pass))) {
+    ESP_LOGI(TAG, "stored home network found; connecting as station");
+    wifi_sta_connect(ssid, pass);
+  } else {
+    ESP_LOGI(TAG, "no home network stored; provision via the setup portal");
+  }
   return true;
 }
 
@@ -899,7 +1198,7 @@ bool start_http_server() {
   httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
   cfg.server_port = portal_config.http_port;
   cfg.lru_purge_enable = true;
-  cfg.max_uri_handlers = 12;
+  cfg.max_uri_handlers = 14;
   cfg.max_open_sockets = MAX_HTTP_CLIENTS;
   cfg.stack_size = 8192;
   cfg.send_wait_timeout = 1;
@@ -953,6 +1252,21 @@ bool start_http_server() {
   uri_rom_post.method = HTTP_POST;
   uri_rom_post.handler = handle_api_rom_post;
 
+  static httpd_uri_t uri_wifi_get = {};
+  uri_wifi_get.uri = "/api/wifi";
+  uri_wifi_get.method = HTTP_GET;
+  uri_wifi_get.handler = handle_api_wifi_get;
+
+  static httpd_uri_t uri_wifi_post = {};
+  uri_wifi_post.uri = "/api/wifi";
+  uri_wifi_post.method = HTTP_POST;
+  uri_wifi_post.handler = handle_api_wifi_post;
+
+  static httpd_uri_t uri_wifi_page = {};
+  uri_wifi_page.uri = "/wifi";
+  uri_wifi_page.method = HTTP_GET;
+  uri_wifi_page.handler = handle_wifi_page;
+
   static httpd_uri_t uri_ws = {};
   uri_ws.uri = "/ws";
   uri_ws.method = HTTP_GET;
@@ -972,6 +1286,9 @@ bool start_http_server() {
   httpd_register_uri_handler(server, &uri_save_reset);
   httpd_register_uri_handler(server, &uri_save_post);
   httpd_register_uri_handler(server, &uri_rom_post);
+  httpd_register_uri_handler(server, &uri_wifi_get);
+  httpd_register_uri_handler(server, &uri_wifi_post);
+  httpd_register_uri_handler(server, &uri_wifi_page);
   httpd_register_uri_handler(server, &uri_ws);
   httpd_register_uri_handler(server, &uri_static);
   httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handle_not_found);
@@ -990,6 +1307,7 @@ bool web_portal_begin(const WebPortalConfig &config) {
   if (!spiffs_mounted) spiffs_mounted = mount_spiffs();
   if (!start_wifi_ap(config)) return false;
   if (!start_http_server()) return false;
+  publish_wifi_status();
   return true;
 }
 

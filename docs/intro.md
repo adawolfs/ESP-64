@@ -37,7 +37,7 @@ save upload/download.
 | --- | --- |
 | MCU | ESP32-C3 (RISC-V single-core) |
 | Flash | 4 MB |
-| Joy-Bus data | GPIO4 (`N64_JOYBUS_DATA_GPIO` overridable) |
+| Joy-Bus data | GPIO7 (`N64_JOYBUS_DATA_GPIO` overridable) |
 | Data line | Single-wire, open-drain, 3.3 V, shared ground |
 
 :::note ESP32-C3-only constraint
