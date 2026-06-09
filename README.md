@@ -52,7 +52,7 @@ para integrarse luego en un sitio **Docusaurus** (frontmatter + `_category_.json
 |---|---|
 | MCU | ESP32-C3 (RISC-V single-core) |
 | Flash | 4 MB internos (sin SD, sin flash/PSRAM externos) |
-| Línea de datos Joy-Bus | GPIO4 (`N64_JOYBUS_DATA_GPIO` lo sobreescribe) |
+| Línea de datos Joy-Bus | GPIO7 (`N64_JOYBUS_DATA_GPIO` lo sobreescribe) |
 | Sensado de power-loss (opcional) | `POWER_LOSS_SENSE_GPIO` (deshabilitado por defecto: `-1`) |
 
 La línea de datos del Joy-Bus es **single-wire open-drain**: el firmware solo tira a
@@ -248,7 +248,7 @@ Casi todo es ajustable en [`main/board_config.h`](main/board_config.h) (namespac
 
 | Símbolo | Default | Para qué |
 |---|---|---|
-| `N64_JOYBUS_DATA_GPIO` | `4` | Pin de datos del Joy-Bus |
+| `N64_JOYBUS_DATA_GPIO` | `7` | Pin de datos del Joy-Bus |
 | `POWER_LOSS_SENSE_GPIO` | `-1` | Sensado de power-loss; `-1` deshabilita el monitor |
 | `WEB_AP_SSID` / `WEB_AP_PASSWORD` | `GameBoy-Link` / `gameboy123` | SoftAP |
 | `WEB_HTTP_PORT` / `WEB_SOCKET_PORT` | `80` | HTTP + WebSocket unificados |
